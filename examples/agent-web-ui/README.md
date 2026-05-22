@@ -67,6 +67,15 @@ NATS_SERVICE_URL=nats://host:4222 bun run dev
 Для демонстрации agents из разных независимых NATS-шин:
 
 ```bash
+NATS_CONNECTIONS_JSON='{"demo":"nats://127.0.0.1:4222","weather":"nats://host:4222","mytest":"nats://test-host:4222"}' bun run dev
+```
+
+Для production/deploy лучше использовать JSON-формат, потому он не зависит от
+разделителя `;` и нормально переживает URL с encoded credentials.
+
+Локально можно использовать короткий формат:
+
+```bash
 NATS_CONNECTIONS='demo=nats://127.0.0.1:4222;weather=nats://host:4222;mytest=nats://test-host:4222' bun run dev
 ```
 

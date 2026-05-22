@@ -33,13 +33,16 @@ agents/controller, используется multi-NATS режим:
 ```text
 NATS_URL=nats://nats-synadia-dev_nats:4222
 NATS_EXTERNAL_NETWORK=rag-stack_default
-NATS_CONNECTIONS=demo=nats://nats-synadia-dev_nats:4222;weather=nats://<user>:<password>@rag-stack_inference_nats:4222
+NATS_CONNECTIONS_JSON={"demo":"nats://nats-synadia-dev_nats:4222","weather":"nats://<user>:<password>@rag-stack_inference_nats:4222"}
 START_BASIC_AGENTS=true
 ```
 
 В этом режиме `basic.demo.*` регистрируются в local demo NATS, а `weather`
 читается из `rag-stack_inference_nats`. UI показывает их вместе, но каждый
 prompt маршрутизируется обратно в свою шину.
+Для deploy используем именно `NATS_CONNECTIONS_JSON`: старый
+`NATS_CONNECTIONS=name=url;name2=url2` удобен локально, но `;` может быть
+обработан shell-ом или deploy tooling как разделитель команд/значений.
 
 Weather agent ожидает координаты. Для него добавлен adapter: пользователь
 заполняет lat/lon в UI, а bridge отправляет их как top-level fields envelope-а.
@@ -85,7 +88,7 @@ START_BASIC_AGENTS=false
 Параметры:
 
 ```text
-NATS_CONNECTIONS=demo=nats://local:4222;weather=nats://external:4222;mytest=nats://test:4222
+NATS_CONNECTIONS_JSON={"demo":"nats://local:4222","weather":"nats://external:4222","mytest":"nats://test:4222"}
 ```
 
 Что получаем:
@@ -95,6 +98,12 @@ NATS_CONNECTIONS=demo=nats://local:4222;weather=nats://external:4222;mytest=nats
 - одинаковые raw instance ids не конфликтуют, потому UI instance id получает
   prefix connection-а;
 - prompt всегда уходит в тот connection, где agent был найден.
+
+Локальный короткий вариант тоже поддерживается:
+
+```text
+NATS_CONNECTIONS=demo=nats://local:4222;weather=nats://external:4222;mytest=nats://test:4222
+```
 
 ### 3. UI + наши demo agents в общей NATS-шине
 

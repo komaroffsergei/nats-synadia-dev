@@ -39,12 +39,30 @@ NATS_SERVICE_URL
 UI bridge также поддерживает несколько независимых NATS connections:
 
 ```text
+NATS_CONNECTIONS_JSON={"demo":"nats://nats-synadia-dev_nats:4222","weather":"nats://<user>:<password>@rag-stack_inference_nats:4222"}
+```
+
+`NATS_CONNECTIONS_JSON` - рекомендуемый production формат. Он принимает JSON
+object `{ "name": "url" }` или array объектов:
+
+```json
+[
+  { "name": "demo", "url": "nats://nats-synadia-dev_nats:4222" },
+  { "name": "weather", "url": "nats://<user>:<password>@rag-stack_inference_nats:4222" }
+]
+```
+
+Для локальной ручной проверки есть короткий формат:
+
+```text
 NATS_CONNECTIONS=demo=nats://nats-synadia-dev_nats:4222;weather=nats://<user>:<password>@rag-stack_inference_nats:4222
 ```
 
 Это отдельный режим от server-list через запятую. Запятая внутри NATS URL
 означает cluster/failover для одного client-а, а `NATS_CONNECTIONS` через `;`
 открывает несколько client-ов к разным NATS-шинам.
+В deploy лучше не полагаться на `;`: используйте `NATS_CONNECTIONS_JSON`, чтобы
+строка не была обрезана shell-ом, CI form parser-ом или deploy wrapper-ом.
 
 Поведение:
 

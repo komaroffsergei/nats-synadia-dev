@@ -49,7 +49,10 @@ export function parseConfig(argv: string[]): ServerConfig {
 
   const contextFlag = pickFlag("--context");
   const contextEnv = process.env["NATS_CONTEXT"];
-  const explicitConnections = pickFlag("--nats-connections") ?? process.env["NATS_CONNECTIONS"];
+  const explicitConnections =
+    pickFlag("--nats-connections") ??
+    process.env["NATS_CONNECTIONS_JSON"] ??
+    process.env["NATS_CONNECTIONS"];
   const explicitServers =
     pickFlag("--nats-url") ??
     pickFlag("--servers") ??
@@ -81,6 +84,9 @@ export function parseConfig(argv: string[]): ServerConfig {
 }
 
 function parseConnections(raw: string): NatsConnectionConfig[] {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) return parseConnectionsJson(trimmed);
+
   const out: NatsConnectionConfig[] = [];
   const usedIds = new Set<string>();
   for (const entry of raw.split(";")) {
@@ -109,6 +115,46 @@ function parseConnections(raw: string): NatsConnectionConfig[] {
     throw new Error("NATS_CONNECTIONS did not contain any usable entries");
   }
   return out;
+}
+
+function parseConnectionsJson(raw: string): NatsConnectionConfig[] {
+  const parsed = JSON.parse(raw) as unknown;
+  const entries: { label: string; value: string }[] = [];
+
+  if (Array.isArray(parsed)) {
+    for (const [index, item] of parsed.entries()) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw new Error(`NATS_CONNECTIONS_JSON item #${index} must be an object`);
+      }
+      const record = item as Record<string, unknown>;
+      const label = String(record["label"] ?? record["name"] ?? `nats-${index + 1}`);
+      if (record["context"]) {
+        entries.push({ label, value: `context:${String(record["context"])}` });
+      } else {
+        entries.push({ label, value: String(record["url"] ?? record["servers"] ?? "") });
+      }
+    }
+  } else if (parsed && typeof parsed === "object") {
+    for (const [label, value] of Object.entries(parsed)) {
+      entries.push({ label, value: String(value) });
+    }
+  } else {
+    throw new Error("NATS_CONNECTIONS_JSON must be an object or array");
+  }
+
+  const usedIds = new Set<string>();
+  return entries.map((entry) => {
+    if (!entry.value) throw new Error(`empty NATS connection value for ${entry.label}`);
+    const baseId = sanitizeConnectionId(entry.label);
+    const id = uniqueConnectionId(baseId, usedIds);
+    usedIds.add(id);
+    if (entry.value.startsWith("context:")) {
+      const context = entry.value.slice("context:".length).trim();
+      if (!context) throw new Error(`empty context in NATS connection ${entry.label}`);
+      return { id, label: entry.label, context };
+    }
+    return { id, label: entry.label, servers: entry.value };
+  });
 }
 
 function sanitizeConnectionId(value: string | undefined): string {

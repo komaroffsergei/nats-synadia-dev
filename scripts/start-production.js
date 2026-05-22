@@ -31,7 +31,7 @@ const natsUrl =
   process.env.NATS_SERVERS ||
   process.env.NATS_SERVICE_URL ||
   "nats://nats-synadia-dev_nats:4222";
-const natsConnections = process.env.NATS_CONNECTIONS || "";
+const natsConnections = process.env.NATS_CONNECTIONS_JSON || process.env.NATS_CONNECTIONS || "";
 const port = process.env.PORT || "3300";
 const startBasicAgents = !["0", "false", "no", "off"].includes(
   String(process.env.START_BASIC_AGENTS || "true").toLowerCase(),
@@ -83,7 +83,12 @@ function unique(values) {
 }
 
 function parseNatsConnections(raw) {
-  return String(raw)
+  const trimmed = String(raw).trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return parseNatsConnectionsJson(trimmed);
+  }
+  return trimmed
     .split(";")
     .map((entry) => entry.trim())
     .filter(Boolean)
@@ -92,6 +97,21 @@ function parseNatsConnections(raw) {
       return eqAt >= 0 ? entry.slice(eqAt + 1).trim() : entry;
     })
     .filter((value) => value && !value.startsWith("context:"));
+}
+
+function parseNatsConnectionsJson(raw) {
+  const parsed = JSON.parse(raw);
+  const values = [];
+  if (Array.isArray(parsed)) {
+    for (const item of parsed) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const value = item.url || item.servers || (item.context ? `context:${item.context}` : "");
+      if (value) values.push(String(value));
+    }
+  } else if (parsed && typeof parsed === "object") {
+    for (const value of Object.values(parsed)) values.push(String(value));
+  }
+  return values.filter((value) => value && !value.startsWith("context:"));
 }
 
 async function waitForTcp(urlValue, timeoutMs = 60_000) {
