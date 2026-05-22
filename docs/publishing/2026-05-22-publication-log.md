@@ -104,7 +104,7 @@
 
 Результат: успешно. `/healthz` вернул `ok=true`, controller напечатал `agents.prompt.basic.demo.*`, UI bridge подключился к NATS и слушал `0.0.0.0:3333`.
 
-### 2026-05-22T08:16:00+03:00
+### 2026-05-22T08:13:00+03:00
 
 Действие: добавлена проектная документация и PNG-схемы.
 
@@ -330,3 +330,36 @@ curl --noproxy '*' -k -fsSI https://nats-synadia-dev.gis-master.ru/
 ```
 
 Итог: проект опубликован на `https://nats-synadia-dev.gis-master.ru/`.
+
+### 2026-05-22T08:16:00+03:00
+
+Проблема после публикации: при prompt в chat agent-а UI показывал ошибку:
+
+```text
+handler error: Ollama 404: 404 page not found [500]
+```
+
+Проверки:
+
+```sh
+curl --noproxy '*' -k https://nats2ollama.gis-master.ru/api/tags
+curl --noproxy '*' -k https://nats2ollama.gis-master.ru/api/chat
+```
+
+Результат: оба endpoint-а вернули `404 page not found`.
+
+Причина: `nats2ollama.gis-master.ru` не является прямым Ollama HTTP API для этого demo, а `src/common.js` вызывает именно `${OLLAMA_BASE_URL}/api/chat`.
+
+Рабочий endpoint:
+
+```sh
+curl --noproxy '*' http://ollama.h100.local/api/tags
+curl --noproxy '*' http://ollama.h100.local/api/chat
+```
+
+Результат: `200 OK`, модели `qwen3:30b` и `qwen3.5:9b` доступны.
+
+Решение:
+
+- заменить `OLLAMA_BASE_URL` в `stack/nats-synadia-dev.drs` и `docker/Dockerfile` на `http://ollama.h100.local`;
+- улучшить текст ошибки в `src/common.js` для 404, чтобы сразу было понятно, что base URL не является прямым Ollama endpoint.

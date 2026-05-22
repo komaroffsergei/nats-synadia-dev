@@ -22,7 +22,7 @@ Service :app, image: APP_IMAGE do
       PORT: '3300',
       NATS_URL: NATS_URL,
       BASIC_OWNER: 'demo',
-      OLLAMA_BASE_URL: 'https://nats2ollama.gis-master.ru',
+      OLLAMA_BASE_URL: 'http://ollama.h100.local',
       OLLAMA_MODEL: 'qwen3:30b',
       OLLAMA_STREAM: 'false',
       OLLAMA_THINK: 'false',

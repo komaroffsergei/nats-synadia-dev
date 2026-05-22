@@ -150,6 +150,16 @@ export async function* streamOllama({ prompt, systemPrompt }) {
 
   if (!response.ok) {
     const body = await response.text();
+    if (response.status === 404) {
+      throw new Error(
+        [
+          `Ollama 404: ${baseUrl}/api/chat не найден.`,
+          "Проверь OLLAMA_BASE_URL: это должен быть прямой Ollama HTTP endpoint, а не NATS bridge или UI host.",
+          `Быстрая проверка: curl --noproxy '*' ${baseUrl}/api/tags`,
+          `Ответ сервера: ${body.slice(0, 300)}`,
+        ].join(" "),
+      );
+    }
     throw new Error(`Ollama ${response.status}: ${body.slice(0, 500)}`);
   }
 
