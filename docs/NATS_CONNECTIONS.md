@@ -80,16 +80,25 @@ agents.hb.weather.dev.h100
 agents.status.weather.dev.h100
 ```
 
-Ограничение: generic prompt из нашего UI не передаёт `lat/lon` в `extra`, а
-weather agent в соседнем проекте ожидает координаты. Текущая Ruby-реализация
-может извлечь координаты из текста, поэтому рабочий smoke prompt выглядит так:
+Weather agent в соседнем проекте ожидает координаты. Сейчас в UI добавлен
+adapter: для `agents.prompt.weather.dev.h100` показываются поля `lat` и `lon`,
+а bridge отправляет их в top-level fields NATS envelope:
+
+```text
+{
+  "prompt": "как погода в йошкар оле",
+  "lat": 56.6328,
+  "lon": 47.8951
+}
+```
+
+Ruby weather agent читает эти поля как `Envelope.extra` и больше не требует
+писать координаты прямо в prompt. Старый текстовый smoke вариант тоже остаётся
+рабочим:
 
 ```text
 lat=54.9885 lon=73.3242. Кратко опиши текущую погоду для проверки связи.
 ```
-
-Для удобного production UX лучше добавить маленький adapter/form для
-`extra.lat` и `extra.lon`.
 
 Проверено после deploy 2026-05-22:
 

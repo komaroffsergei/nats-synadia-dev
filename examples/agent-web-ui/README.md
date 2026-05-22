@@ -62,6 +62,27 @@ NATS_SERVICE_URL=nats://host:4222 bun run dev
 Если URL содержит token или `user:password`, `/healthz` и server log показывают
 адрес с redaction, без secret material.
 
+## Weather adapter
+
+Для external agent-а `agents.prompt.weather.dev.h100` UI показывает поля
+`lat/lon` и примеры запросов. Prompt отправляется как обычный текст, а
+координаты уходят в NATS envelope отдельными top-level fields:
+
+```json
+{
+  "prompt": "как погода в йошкар оле",
+  "lat": 56.6328,
+  "lon": 47.8951
+}
+```
+
+Примеры из интерфейса:
+
+```text
+Йошкар-Ола: 56.6328, 47.8951
+Омск:       54.9885, 73.3242
+```
+
 ## Групповой prompt
 
 Галочки на карточках создают controller-managed group session для `basic`

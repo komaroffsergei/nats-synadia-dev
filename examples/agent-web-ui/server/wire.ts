@@ -33,6 +33,9 @@ export type WireAttachment = {
   base64: string;
 };
 
+/** Extra JSON fields added to the prompt envelope for domain-specific agents. */
+export type PromptExtra = Record<string, string | number | boolean | null>;
+
 /** Spec for controller-managed basic group sessions. */
 export type BasicGroupCreateSpec = {
   personas: string[];
@@ -65,6 +68,7 @@ export type ClientMessage =
       instanceId: string;
       text: string;
       attachments?: WireAttachment[];
+      extra?: PromptExtra;
     }
   | { kind: "cancel"; id: string }
   | { kind: "query-reply"; id: string; queryId: string; answer: string }

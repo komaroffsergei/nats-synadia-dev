@@ -6,7 +6,7 @@ import { fileToAttachment, useBridge } from "../composables/useBridge.ts";
 import { startPromptStream } from "../composables/promptStreaming.ts";
 import { getSession, messagesFor, type Message } from "../stores/chat.ts";
 import { bucketOf, BUCKETS } from "../stores/agents.ts";
-import type { DiscoveredAgentDTO } from "../wire.ts";
+import type { DiscoveredAgentDTO, PromptExtra } from "../wire.ts";
 
 const props = defineProps<{ agent: DiscoveredAgentDTO }>();
 
@@ -55,8 +55,14 @@ const currentMessages = computed(() => messagesFor(props.agent.instanceId));
 const busy = computed(() => getSession(props.agent.instanceId).activePromptId !== null);
 const attachmentsOk = computed(() => props.agent.promptEndpoint.attachmentsOk === true);
 const maxPayloadBytes = computed(() => props.agent.promptEndpoint.maxPayloadBytes);
+const promptAdapter = computed<"weather" | null>(() => {
+  // Пока адаптер один: weather agent из соседнего Ruby сервиса. Проверяем
+  // именно subject, чтобы не завязаться на UI bucket или отсутствующую metadata.
+  if (props.agent.promptEndpoint.subject === "agents.prompt.weather.dev.h100") return "weather";
+  return null;
+});
 
-async function onSubmit(text: string, files: File[]): Promise<void> {
+async function onSubmit(text: string, files: File[], extra?: PromptExtra): Promise<void> {
   let attachments: Awaited<ReturnType<typeof fileToAttachment>>[] | undefined;
   if (files.length > 0) {
     try {
@@ -67,7 +73,7 @@ async function onSubmit(text: string, files: File[]): Promise<void> {
     }
   }
 
-  startPromptStream(props.agent, text, attachments);
+  startPromptStream(props.agent, text, attachments, extra);
 }
 
 function onQueryReply(message: Message, answer: string): void {
@@ -98,8 +104,10 @@ function onStop(): void {
     <MessageList :messages="currentMessages" @reply="onQueryReply" />
     <PromptArea
       :busy="busy"
+      :disabled="false"
       :attachments-ok="attachmentsOk"
       :max-payload-bytes="maxPayloadBytes"
+      :adapter="promptAdapter"
       @submit="onSubmit"
       @stop="onStop"
     />

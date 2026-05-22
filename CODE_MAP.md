@@ -40,9 +40,12 @@
 
 - `examples/agent-web-ui/server/bridge.ts` - bridge между browser WebSocket и `@synadia-ai/agents`.
   Делает discovery, prompt streaming, cancel/query reply, а также вызывает group endpoints controller-а.
+  Для weather adapter-а принимает `extra.lat/lon` и вручную собирает NATS
+  envelope, потому публичный `Agent.prompt()` SDK принимает только text/attachments.
 
 - `examples/agent-web-ui/server/wire.ts` - wire-contract между browser и Bun bridge.
-  Здесь оставлен только текущий demo surface: discovery, prompt streaming и `basic-group-*`.
+  Здесь оставлен только текущий demo surface: discovery, prompt streaming,
+  prompt `extra` для adapter-ов и `basic-group-*`.
 
 - `examples/agent-web-ui/src/stores/agents.ts` - классификация найденных agents.
   `bucketOf()` читает metadata и раскладывает карточки на persona/controller/group/openclaw/other.
@@ -57,8 +60,14 @@
   Для `BASIC GROUP` здесь находится кнопка `×`: она ищет `BASIC CONTROL`, вызывает `basicGroupStop()`, убирает карточку и чистит локальный chat state.
 
 - `examples/agent-web-ui/src/components/ChatPanel.vue` - правый чат выбранного agent-а или group session.
+  Здесь включается weather adapter для `agents.prompt.weather.dev.h100`.
+
+- `examples/agent-web-ui/src/components/PromptArea.vue` - ввод prompt-а.
+  Для weather agent-а показывает поля `lat/lon` и примеры "Йошкар-Ола",
+  "Омск", "Сводка".
 
 - `examples/agent-web-ui/src/composables/promptStreaming.ts` - сборка streaming events в сообщения чата.
+  Передаёт prompt `extra` в bridge и показывает lat/lon в истории сообщения.
 
 
 ## OpenClaw

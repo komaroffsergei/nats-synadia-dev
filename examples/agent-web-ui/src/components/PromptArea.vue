@@ -1,16 +1,48 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, computed } from "vue";
 import AttachmentChips from "./AttachmentChips.vue";
+import type { PromptExtra } from "../wire.ts";
+
+type AdapterKind = "weather";
+
+type WeatherExample = {
+  label: string;
+  prompt: string;
+  lat: string;
+  lon: string;
+};
+
+const WEATHER_EXAMPLES: WeatherExample[] = [
+  {
+    label: "Йошкар-Ола",
+    prompt: "Как погода в Йошкар-Оле сейчас? Кратко: температура, осадки, облачность.",
+    lat: "56.6328",
+    lon: "47.8951",
+  },
+  {
+    label: "Омск",
+    prompt: "Проверь текущую погоду и риск осадков рядом с точкой.",
+    lat: "54.9885",
+    lon: "73.3242",
+  },
+  {
+    label: "Сводка",
+    prompt: "Дай короткую погодную сводку: температура, влажность, давление, осадки.",
+    lat: "56.6328",
+    lon: "47.8951",
+  },
+];
 
 const props = defineProps<{
   busy: boolean;
   disabled: boolean;
   attachmentsOk: boolean;
   maxPayloadBytes?: number | undefined;
+  adapter?: AdapterKind | null;
 }>();
 
 const emit = defineEmits<{
-  submit: [text: string, files: File[]];
+  submit: [text: string, files: File[], extra?: PromptExtra];
   stop: [];
 }>();
 
@@ -18,6 +50,11 @@ const text = ref("");
 const files = ref<File[]>([]);
 const fileInput = ref<HTMLInputElement | null>(null);
 const textarea = ref<HTMLTextAreaElement | null>(null);
+const weatherLat = ref("56.6328");
+const weatherLon = ref("47.8951");
+const adapterError = ref<string | null>(null);
+
+const isWeatherAdapter = computed(() => props.adapter === "weather");
 
 function autoResize(): void {
   const el = textarea.value;
@@ -53,7 +90,9 @@ function removeFile(i: number): void {
 function submit(): void {
   const t = text.value.trim();
   if (!t || props.busy || props.disabled) return;
-  emit("submit", t, [...files.value]);
+  const extra = buildAdapterExtra();
+  if (adapterError.value) return;
+  emit("submit", t, [...files.value], extra);
   text.value = "";
   files.value = [];
   void nextTick(autoResize);
@@ -61,6 +100,37 @@ function submit(): void {
 
 function stop(): void {
   emit("stop");
+}
+
+function applyWeatherExample(example: WeatherExample): void {
+  // Пример одновременно заполняет prompt и координаты. Пользователь видит
+  // обычный текст, а bridge отправит lat/lon отдельными JSON fields envelope-а.
+  text.value = example.prompt;
+  weatherLat.value = example.lat;
+  weatherLon.value = example.lon;
+  adapterError.value = null;
+  void nextTick(() => {
+    autoResize();
+    textarea.value?.focus();
+  });
+}
+
+function buildAdapterExtra(): PromptExtra | undefined {
+  if (!isWeatherAdapter.value) return undefined;
+
+  const lat = Number(weatherLat.value.trim());
+  const lon = Number(weatherLon.value.trim());
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+    adapterError.value = "lat должен быть числом от -90 до 90";
+    return undefined;
+  }
+  if (!Number.isFinite(lon) || lon < -180 || lon > 180) {
+    adapterError.value = "lon должен быть числом от -180 до 180";
+    return undefined;
+  }
+
+  adapterError.value = null;
+  return { lat, lon };
 }
 
 const payloadHint = computed(() => {
@@ -82,6 +152,40 @@ const overLimit = computed(() => {
 
 <template>
   <div class="wrap" :class="{ disabled }">
+    <div v-if="isWeatherAdapter" class="adapter weather-adapter">
+      <div class="adapter-fields">
+        <label class="coord-field">
+          <span class="mono">lat</span>
+          <input
+            v-model="weatherLat"
+            class="coord-input mono"
+            inputmode="decimal"
+            :disabled="disabled || busy"
+          />
+        </label>
+        <label class="coord-field">
+          <span class="mono">lon</span>
+          <input
+            v-model="weatherLon"
+            class="coord-input mono"
+            inputmode="decimal"
+            :disabled="disabled || busy"
+          />
+        </label>
+      </div>
+      <div class="example-row">
+        <button
+          v-for="example in WEATHER_EXAMPLES"
+          :key="example.label"
+          type="button"
+          class="example-btn"
+          :disabled="disabled || busy"
+          @click="applyWeatherExample(example)"
+        >{{ example.label }}</button>
+      </div>
+      <div v-if="adapterError" class="warn mono">{{ adapterError }}</div>
+    </div>
+
     <div v-if="files.length" class="chips-row">
       <AttachmentChips :files="files" @remove="removeFile" />
       <span
@@ -152,6 +256,66 @@ const overLimit = computed(() => {
   flex-shrink: 0;
 }
 .wrap.disabled { opacity: 0.7; }
+
+.adapter {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.adapter-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-sm);
+}
+
+.coord-field {
+  display: grid;
+  gap: 3px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.coord-input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 var(--space-sm);
+  background: var(--bg-primary);
+  border: var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+}
+
+.coord-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.example-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.example-btn {
+  min-height: 28px;
+  padding: 0 var(--space-sm);
+  border: var(--border-subtle);
+  border-radius: var(--border-radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  transition: all var(--transition-fast);
+}
+
+.example-btn:hover:not(:disabled) {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.example-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .chips-row {
   display: flex;

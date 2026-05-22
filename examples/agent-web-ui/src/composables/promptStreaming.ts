@@ -6,7 +6,7 @@ import {
 } from "../stores/chat.ts";
 import { useBridge } from "./useBridge.ts";
 import { randomUUID } from "../uuid.ts";
-import type { DiscoveredAgentDTO, WireAttachment } from "../wire.ts";
+import type { DiscoveredAgentDTO, PromptExtra, WireAttachment } from "../wire.ts";
 
 /**
  * Start one prompt stream against one discovered agent and mirror every
@@ -16,6 +16,7 @@ export function startPromptStream(
   agent: DiscoveredAgentDTO,
   text: string,
   attachments: WireAttachment[] | undefined,
+  extra?: PromptExtra,
 ): string {
   const bridge = useBridge();
   const instanceId = agent.instanceId;
@@ -30,6 +31,11 @@ export function startPromptStream(
   });
   if (attachments && attachments.length > 0) {
     userMsg.attachments = attachments.map((a) => ({ filename: a.filename, base64: a.base64 }));
+  }
+  if (extra && typeof extra["lat"] === "number" && typeof extra["lon"] === "number") {
+    // Показываем координаты в истории чата, потому сам prompt остаётся
+    // человеческим текстом, а lat/lon уходят в NATS envelope отдельно.
+    userMsg.statusNote = `lat=${extra["lat"]} lon=${extra["lon"]}`;
   }
 
   let currentAgentMsgId = randomUUID();
@@ -54,7 +60,7 @@ export function startPromptStream(
 
   let syncErrored = false;
   let promptId = "";
-  promptId = bridge.prompt(instanceId, text, attachments, {
+  promptId = bridge.prompt(instanceId, text, attachments, extra, {
     onResponse(chunk, responseAttachments) {
       const m = findMessage(instanceId, currentAgentMsgId);
       if (!m) return;

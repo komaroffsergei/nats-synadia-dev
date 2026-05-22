@@ -12,6 +12,7 @@ import type {
   BasicGroupSessionDescriptor,
   ClientMessage,
   DiscoveredAgentDTO,
+  PromptExtra,
   ServerMessage,
   WireAttachment,
 } from "../wire.ts";
@@ -194,12 +195,14 @@ function prompt(
   instanceId: string,
   text: string,
   attachments: WireAttachment[] | undefined,
+  extra: PromptExtra | undefined,
   handlers: StreamHandlers,
 ): string {
   const id = randomUUID();
   streams.set(id, handlers);
   const payload: ClientMessage = { kind: "prompt", id, instanceId, text };
   if (attachments && attachments.length > 0) payload.attachments = attachments;
+  if (extra && Object.keys(extra).length > 0) payload.extra = extra;
   if (!send(payload)) {
     streams.delete(id);
     handlers.onError?.("WebSocket not open");

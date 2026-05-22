@@ -27,14 +27,9 @@ START_BASIC_AGENTS=false
   потому что `START_BASIC_AGENTS=false`.
 - `/healthz` покажет, к какому NATS подключён UI, с замазанными credentials.
 
-Ограничение текущего формата: weather agent ожидает координаты. Обычный prompt
-из нашего generic UI отправляет только `prompt`, без `extra.lat` и `extra.lon`.
-Текущий Ruby agent умеет вытащить координаты из текста, поэтому smoke prompt
-работает, если написать их явно: `lat=54.9885 lon=73.3242 ...`.
-
-Для нормального UX всё равно полезен маленький adapter или form: пользователь
-будет заполнять координаты отдельными полями, а bridge будет отправлять их как
-`extra.lat` и `extra.lon`.
+Weather agent ожидает координаты. Для него добавлен adapter: пользователь
+заполняет lat/lon в UI, а bridge отправляет их как top-level fields envelope-а.
+В Ruby реализации эти поля попадают в `Envelope.extra`.
 
 ## Что можно деплоить сейчас
 
@@ -94,14 +89,19 @@ START_BASIC_AGENTS=true
 
 ### Weather adapter
 
-Зачем: generic prompt не знает про `extra.lat/lon`, а weather agent умеет
-работать с координатами.
+Зачем: generic prompt не знает городскую геокодировку, а weather agent умеет
+работать с numeric coordinates.
 
-Варианты:
+Что реализовано:
 
 - UI form для выбранного `weather` agent-а: prompt + lat + lon.
-- Server-side adapter: если agent `weather/dev/h100`, bridge добавляет `extra`
-  в envelope.
+- Server-side adapter: если request содержит `extra`, bridge вручную собирает
+  JSON envelope и сохраняет `lat/lon` рядом с `prompt`.
+
+Что можно добавить дальше:
+
+- городские presets из backend config;
+- geocoding по названию города перед отправкой prompt-а;
 - Controller command: `ask_weather(prompt, lat, lon)` как отдельный endpoint.
 
 Польза: можно не просто увидеть weather agent в discovery, а реально дергать

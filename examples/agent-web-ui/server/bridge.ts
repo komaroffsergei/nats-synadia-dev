@@ -12,7 +12,10 @@ import {
   Agents,
   HeartbeatTracker,
   decodeBase64,
+  decodeChunk,
+  encodeBase64,
   AttachmentsNotSupportedError,
+  DEFAULT_PROMPT_MAX_WAIT_MS,
   PayloadTooLargeError,
   ServiceError,
   StreamMaxWaitExceededError,
@@ -20,15 +23,29 @@ import {
   type NatsConnection,
   type QueryEvent,
   type RequestAttachment,
+  type StreamMessage,
 } from "@synadia-ai/agents";
 import type {
   BasicGroupSessionDescriptor,
   ClientMessage,
   DiscoveredAgentDTO,
+  PromptExtra,
   ServerMessage,
 } from "./wire.ts";
 
 type ActiveStream = { controller: AbortController };
+type NatsStreamMsg = {
+  data: Uint8Array;
+  headers?: { has?: (key: string) => boolean; get?: (key: string) => string | null };
+};
+type StoppableAsyncIterable<T> = AsyncIterable<T> & { stop(): void };
+type DecodedQueryLike = {
+  type: "query";
+  id: string;
+  replySubject: string;
+  prompt: string;
+  attachments?: { filename: string; content: string }[];
+};
 
 export type BridgeWsData = { bridge: Bridge };
 
@@ -186,10 +203,7 @@ export class Bridge {
     }));
 
     try {
-      const stream = await agent.prompt(msg.text, {
-        attachments,
-        signal: controller.signal,
-      });
+      const stream = await this.openPromptStream(agent, msg.text, attachments, msg.extra, controller.signal);
 
       for await (const ev of stream) {
         if (this.closed) break;
@@ -242,6 +256,111 @@ export class Bridge {
 
   private handleCancel(id: string): void {
     this.activeStreams.get(id)?.controller.abort();
+  }
+
+  private async openPromptStream(
+    agent: Agent,
+    text: string,
+    attachments: RequestAttachment[] | undefined,
+    extra: PromptExtra | undefined,
+    signal: AbortSignal,
+  ): Promise<AsyncIterable<StreamMessage>> {
+    // Обычный путь оставляем через официальный SDK: он сам проверяет payload,
+    // attachments_ok и timeout-ы. Этот путь используется всеми generic agents.
+    if (!extra || Object.keys(extra).length === 0) {
+      return agent.prompt(text, { attachments, signal });
+    }
+
+    // Weather adapter: SDK Agent.prompt() пока не принимает произвольные extra
+    // fields, поэтому формируем protocol envelope вручную и отправляем его в
+    // тот же prompt subject. Это ровно тот формат, который Ruby weather agent
+    // декодирует как Envelope.extra.
+    return this.promptWithExtra(agent, text, attachments, normalizePromptExtra(extra), signal);
+  }
+
+  private async *promptWithExtra(
+    agent: Agent,
+    text: string,
+    attachments: RequestAttachment[] | undefined,
+    extra: PromptExtra,
+    signal: AbortSignal,
+  ): AsyncIterable<StreamMessage> {
+    if (attachments && attachments.length > 0 && agent.promptEndpoint.attachmentsOk === false) {
+      throw new AttachmentsNotSupportedError();
+    }
+
+    const payload = encodePromptEnvelope(text, attachments, extra);
+    const maxPayloadBytes = effectiveMaxPayloadBytes(agent, this.nc);
+    if (maxPayloadBytes !== undefined && payload.byteLength > maxPayloadBytes) {
+      throw new PayloadTooLargeError(maxPayloadBytes, payload.byteLength);
+    }
+
+    const iter = (await this.nc.requestMany(agent.promptSubject, payload, {
+      strategy: "sentinel",
+      maxWait: DEFAULT_PROMPT_MAX_WAIT_MS,
+    })) as StoppableAsyncIterable<NatsStreamMsg>;
+
+    const onAbort = (): void => iter.stop();
+    signal.addEventListener("abort", onAbort, { once: true });
+
+    try {
+      for await (const msg of iter) {
+        if (signal.aborted) throw abortError(signal);
+        if (isServiceErrorSignal(msg)) throw serviceErrorFromMsg(msg);
+        if (isTerminator(msg)) {
+          yield { type: "status", status: "done" };
+          return;
+        }
+
+        let decoded: ReturnType<typeof decodeChunk>;
+        try {
+          decoded = decodeChunk(msg.data);
+        } catch {
+          continue;
+        }
+        if (!decoded) continue;
+        yield this.decodedChunkToStreamMessage(decoded);
+      }
+
+      if (signal.aborted) throw abortError(signal);
+      throw new StreamMaxWaitExceededError(DEFAULT_PROMPT_MAX_WAIT_MS);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+      iter.stop();
+    }
+  }
+
+  private decodedChunkToStreamMessage(decoded: NonNullable<ReturnType<typeof decodeChunk>>): StreamMessage {
+    switch (decoded.type) {
+      case "response":
+        return decoded.attachments !== undefined
+          ? { type: "response", text: decoded.text, attachments: decoded.attachments }
+          : { type: "response", text: decoded.text };
+      case "status":
+        return { type: "status", status: decoded.status };
+      case "query":
+        return this.buildQueryEvent(decoded as DecodedQueryLike);
+    }
+  }
+
+  private buildQueryEvent(decoded: DecodedQueryLike): QueryEvent {
+    let replied = false;
+    return {
+      type: "query",
+      id: decoded.id,
+      prompt: decoded.prompt,
+      ...(decoded.attachments !== undefined ? { attachments: decoded.attachments } : {}),
+      reply: async (answer) => {
+        if (replied) throw new Error(`query ${decoded.id} already replied`);
+        replied = true;
+        const payload =
+          typeof answer === "string"
+            ? new TextEncoder().encode(answer)
+            : encodePromptEnvelope(answer.prompt, answer.attachments as RequestAttachment[] | undefined, {});
+        this.nc.publish(decoded.replySubject, payload);
+        await this.nc.flush();
+      },
+    };
   }
 
   private async handleQueryReply(id: string, queryId: string, answer: string): Promise<void> {
@@ -487,6 +606,83 @@ function isNoRespondersError(err: unknown): boolean {
   const e = err as { name?: unknown; message?: unknown };
   if (e.name === "NoResponders") return true;
   return typeof e.message === "string" && e.message.includes("no responders");
+}
+
+function normalizePromptExtra(extra: PromptExtra): PromptExtra {
+  // В wire extra приходит из браузера. Оставляем только простые JSON scalars,
+  // чтобы adapter не мог перезаписать protocol fields prompt/attachments.
+  const normalized: PromptExtra = {};
+  for (const [key, value] of Object.entries(extra)) {
+    if (key === "prompt" || key === "attachments") continue;
+    if (value === null || typeof value === "string" || typeof value === "boolean") {
+      normalized[key] = value;
+      continue;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) normalized[key] = value;
+  }
+  return normalized;
+}
+
+function encodePromptEnvelope(
+  prompt: string,
+  attachments: RequestAttachment[] | undefined,
+  extra: PromptExtra,
+): Uint8Array {
+  // SDK encoder currently serializes only prompt/attachments. Для weather
+  // adapter-а нужно сохранить top-level lat/lon, поэтому envelope собирается
+  // здесь вручную в том же JSON shape, который читает Ruby implementation.
+  const payload: Record<string, unknown> = { ...extra, prompt };
+  if (attachments && attachments.length > 0) {
+    payload["attachments"] = attachments.map((attachment) => ({
+      filename: attachment.filename,
+      content: encodeBase64(attachment.content),
+    }));
+  }
+  return new TextEncoder().encode(JSON.stringify(payload));
+}
+
+function effectiveMaxPayloadBytes(agent: Agent, nc: NatsConnection): number | undefined {
+  const endpointLimit = agent.promptEndpoint.maxPayloadBytes;
+  const serverLimit = (nc as { info?: { max_payload?: number } }).info?.max_payload;
+  if (endpointLimit !== undefined && serverLimit !== undefined && serverLimit > 0) {
+    return Math.min(endpointLimit, serverLimit);
+  }
+  if (endpointLimit !== undefined) return endpointLimit;
+  return serverLimit && serverLimit > 0 ? serverLimit : undefined;
+}
+
+function isTerminator(msg: { data: Uint8Array; headers?: unknown }): boolean {
+  return msg.data.length === 0 && !msg.headers;
+}
+
+function isServiceErrorSignal(msg: { headers?: { has?: (key: string) => boolean; get?: (key: string) => string | null } }): boolean {
+  const headers = msg.headers;
+  if (!headers) return false;
+  if (typeof headers.has === "function") return headers.has("Nats-Service-Error-Code");
+  if (typeof headers.get === "function") return (headers.get("Nats-Service-Error-Code") ?? "") !== "";
+  return false;
+}
+
+function serviceErrorFromMsg(msg: {
+  data: Uint8Array;
+  headers?: { get?: (key: string) => string | null };
+}): ServiceError {
+  const codeText = msg.headers?.get?.("Nats-Service-Error-Code") ?? "500";
+  const code = Number(codeText);
+  const description = msg.headers?.get?.("Nats-Service-Error") ?? "";
+  let body: Record<string, unknown> | undefined;
+  if (msg.data.length > 0) {
+    const parsed = safeParse<Record<string, unknown>>(new TextDecoder().decode(msg.data));
+    if (parsed) body = parsed;
+  }
+  return new ServiceError(Number.isFinite(code) ? code : 500, description, body);
+}
+
+function abortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const err = new Error("stream aborted");
+  err.name = "AbortError";
+  return err;
 }
 
 function parseStructuredStatus(promptId: string, status: string): ServerMessage | null {
