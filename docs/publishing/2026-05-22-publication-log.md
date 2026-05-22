@@ -512,3 +512,91 @@ result: weather answer received
 
 Наблюдение: сразу после Swarm update был краткий `504` на `/healthz`, но через
 несколько секунд service стабилизировался и дальше стабильно возвращал `200`.
+
+### 2026-05-22T13:43:56+03:00
+
+Публикация multi-NATS режима для одновременной демонстрации local demo agents и
+external weather agent.
+
+Что делали:
+
+- UI bridge открывает несколько независимых NATS connections;
+- agents в UI получают badge connection-а: `demo`, `weather`;
+- prompt маршрутизируется обратно в тот NATS client, где agent был найден;
+- dry-stack подключает `app` одновременно к internal `demo_internal` и external
+  `rag-stack_default`;
+- для production добавлен `NATS_CONNECTIONS_JSON`, потому `NATS_CONNECTIONS`
+  через `;` оказался неудобен для deploy-переменных и URL с credentials.
+
+Проблема по ходу публикации:
+
+```text
+NATS_CONNECTIONS=demo=...;weather=...
+```
+
+После deploy healthcheck показывал только `demo`. Вывод: semicolon-separated
+строка была обрезана/не дошла полностью через deploy path. Исправление:
+передавать connections как JSON object:
+
+```text
+NATS_CONNECTIONS_JSON={"demo":"nats://nats-synadia-dev_nats:4222","weather":"nats://<redacted>@rag-stack_inference_nats:4222"}
+```
+
+Локальные проверки:
+
+```text
+bun run typecheck -> success
+bun run build -> success
+node --check scripts/start-production.js -> success
+node --check src/common.js -> success
+NATS_CONNECTIONS_JSON parse smoke -> success
+dry-stack to_compose -> пробрасывает NATS_CONNECTIONS_JSON и обе docker networks
+```
+
+Push:
+
+```text
+commit 7aeabdf feat: добавить multi-NATS discovery в UI
+commit 8cb8570 fix: подключить app к internal и external NATS networks
+commit 9b56dcb fix: добавить JSON формат multi-NATS connections
+git push -o ci.skip origin main -> success
+```
+
+Ручной pipeline с multi-NATS variables:
+
+```text
+pipeline 2552 -> success
+build push -> success
+deploy -> success
+```
+
+Production health:
+
+```text
+https://nats-synadia-dev.gis-master.ru/healthz -> HTTP 200
+nats.mode -> multi
+connections -> demo:nats-synadia-dev_nats:4222, weather:rag-stack_inference_nats:4222
+credentials -> redacted
+```
+
+Production discovery через публичный WebSocket:
+
+```text
+wss://nats-synadia-dev.gis-master.ru/ws
+ready -> demo:nats-synadia-dev_nats:4222, weather:rag-stack_inference_nats:4222
+agents -> 7
+demo    -> basic/demo/control + teacher + engineer + skeptic + manager + moderator
+weather -> agents.prompt.weather.dev.h100
+```
+
+End-to-end smoke:
+
+```text
+weather prompt + extra.lat/lon -> ack -> done, ответ получен
+demo teacher prompt            -> ack -> done, ответ получен
+```
+
+Результат: production UI теперь показывает agents из нескольких NATS-шин вместе.
+Для подключения пользовательских тестовых NATS достаточно добавить ещё один
+entry в `NATS_CONNECTIONS_JSON`, например `"mytest":"nats://host:4222"`, и
+дать контейнеру сетевой доступ к этому host/network.
