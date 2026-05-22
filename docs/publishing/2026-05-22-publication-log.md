@@ -405,3 +405,52 @@ prompt teacher -> response chunks -> done
 ```
 
 Результат: prompt в agent `teacher` больше не падает с `Ollama 404` или `fetch failed`.
+
+### 2026-05-22T08:55:22+03:00
+
+Публикация исправления удаления `BASIC GROUP` и новой sequence diagram.
+
+Локальные проверки:
+
+```text
+bun run typecheck -> success
+bun run build -> success
+node --check src/basic-controller.js -> success
+```
+
+Git push:
+
+```text
+local HEAD c1ec942444d008cab51153254727e8f1fcc03d52
+remote main before push c1ec942444d008cab51153254727e8f1fcc03d52
+git push origin main -> Everything up-to-date
+remote main after push c1ec942444d008cab51153254727e8f1fcc03d52
+```
+
+Pipeline:
+
+```text
+2538 success
+job 4868 build push success
+job 4869 deploy success
+```
+
+Production checks:
+
+```text
+https://nats-synadia-dev.gis-master.ru/healthz -> HTTP/2 200, ok=true
+https://nats-synadia-dev.gis-master.ru/ -> HTTP/2 200
+public bundle index-Bf3yc08H.js contains "Удалить group session" and group_id stop logic
+```
+
+WebSocket smoke на production:
+
+```text
+wss://nats-synadia-dev.gis-master.ru/ws
+discover -> agents=6
+basic-group-create -> created group-1 label=smoke-delete-1779429306417
+basic-group-stop -> stopped group-1
+```
+
+Результат: кнопка удаления `BASIC GROUP` опубликована, а production bridge
+успешно останавливает динамическую group session по техническому `group_id`.
