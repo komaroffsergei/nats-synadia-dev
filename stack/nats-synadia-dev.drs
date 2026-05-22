@@ -7,6 +7,8 @@ NATS_URL = ENV['NATS_URL'] || ENV['NATS_SERVERS'] || ENV['NATS_SERVICE_URL'] || 
 NATS_CONNECTIONS = ENV['NATS_CONNECTIONS']
 NATS_EXTERNAL_NETWORK = ENV['NATS_EXTERNAL_NETWORK']
 
+Network :demo_internal
+
 if NATS_EXTERNAL_NETWORK && !NATS_EXTERNAL_NETWORK.empty?
   Network :nats_external, external: true, name: NATS_EXTERNAL_NETWORK
 end
@@ -15,6 +17,7 @@ end
 # Browser clients do not connect to this service directly:
 # the browser talks to app:/ws, and the Bun bridge talks to NATS.
 Service :nats, image: 'nats:2.11.6-scratch' do
+  network :demo_internal
   command ['-js', '-m', '8222']
 end
 
@@ -24,6 +27,7 @@ end
 # - runs controller/persona/group-session agents in the same container.
 Service :app, image: APP_IMAGE, extra_hosts: ['ollama.h100.local:192.168.28.134'] do
   ingress host: HOST, port: 3300
+  network :demo_internal
   network :nats_external if NATS_EXTERNAL_NETWORK && !NATS_EXTERNAL_NETWORK.empty?
 
   env HOST: '0.0.0.0',
