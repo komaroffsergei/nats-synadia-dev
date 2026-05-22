@@ -169,3 +169,19 @@ origin https://git.giscloud.ru/trizna/nats-synadia-dev.git
 Команда: `git fetch origin main`.
 
 Результат: успешно. Remote `main` содержит отдельный `Initial commit` только с README. Локальная история проекта и remote history не имеют общего merge-base, поэтому перед push нужен merge unrelated history без перезаписи remote.
+
+### 2026-05-22T08:32:00+03:00
+
+Коммит:
+
+```text
+38a7813 feat: добавить Synadia UI и публикацию на gis-master
+```
+
+После commit выполнен merge remote initial history:
+
+```text
+6a6fa75 chore: merge remote initial main
+```
+
+Причина merge: remote `origin/main` уже содержал `Initial commit`, а локальная история проекта была отдельной. Использована стратегия `ours`, чтобы сохранить remote commit в истории и не перетереть текущее содержимое проекта.
