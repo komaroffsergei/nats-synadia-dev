@@ -298,3 +298,35 @@ docker run --rm -e CI_SKIP_PUSH=1 ... build/nats-synadia-dev-local
 builder-registry.builder.giscloud.ru/trizna/nats-synadia-dev/app/main:0.1.0
 builder-registry.builder.giscloud.ru/trizna/nats-synadia-dev/app/main:latest
 ```
+
+### 2026-05-22T09:04:00+03:00
+
+Push исправлений builder-а:
+
+```text
+3b7edd3 main -> origin/main
+```
+
+Pipeline:
+
+```text
+2532 success
+job 4860 build push success
+job 4861 deploy success
+```
+
+Проверка production URL:
+
+```sh
+curl --noproxy '*' -k -fsS https://nats-synadia-dev.gis-master.ru/healthz
+curl --noproxy '*' -k -fsSI https://nats-synadia-dev.gis-master.ru/
+```
+
+Результат:
+
+```text
+/healthz: ok=true, service=synadia-nats-agents-web-ui, NATS=nats://nats-synadia-dev_nats:4222, sdkProtocolVersion=0.3
+/: HTTP/2 200, x-proxy=traefik
+```
+
+Итог: проект опубликован на `https://nats-synadia-dev.gis-master.ru/`.
