@@ -379,3 +379,29 @@ extra_hosts: ['ollama.h100.local:192.168.28.134']
 ```
 
 Так container будет ходить на нужный IP, но HTTP Host останется `ollama.h100.local`.
+
+### 2026-05-22T08:19:00+03:00
+
+Push host mapping:
+
+```text
+048779e main -> origin/main
+```
+
+Pipeline:
+
+```text
+2536 success
+job 4866 build push success
+job 4867 deploy success
+```
+
+End-to-end smoke через публичный WebSocket:
+
+```text
+wss://nats-synadia-dev.gis-master.ru/ws
+discover -> agents=6
+prompt teacher -> response chunks -> done
+```
+
+Результат: prompt в agent `teacher` больше не падает с `Ollama 404` или `fetch failed`.
