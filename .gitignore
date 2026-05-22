@@ -1,0 +1,10 @@
+node_modules/
+.env
+.idea/
+*.iml
+.DS_Store
+nats-server*
+*.log
+.openclaw-nats-channel-runtime/
+.runtime/
+examples/agent-web-ui/dist/

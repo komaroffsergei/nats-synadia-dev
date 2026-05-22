@@ -1,0 +1,211 @@
+<script setup lang="ts">
+import { computed, ref } from "vue";
+import MessageList from "./MessageList.vue";
+import PromptArea from "./PromptArea.vue";
+import { fileToAttachment, useBridge } from "../composables/useBridge.ts";
+import { startPromptStream } from "../composables/promptStreaming.ts";
+import { getSession, messagesFor, type Message } from "../stores/chat.ts";
+import { ccexecState } from "../stores/ccexec.ts";
+import { piexecState } from "../stores/piexec.ts";
+import { bucketOf, BUCKETS } from "../stores/agents.ts";
+import type { DiscoveredAgentDTO } from "../wire.ts";
+
+const props = defineProps<{ agent: DiscoveredAgentDTO }>();
+
+const bridge = useBridge();
+const error = ref<string | null>(null);
+
+const isCcSession = computed(
+  () =>
+    props.agent.agent === "cc-headless" &&
+    props.agent.metadata?.["role"] === "session",
+);
+
+const isPiSession = computed(
+  () =>
+    props.agent.agent === "pi-headless" &&
+    props.agent.metadata?.["role"] === "session",
+);
+
+/**
+ * True for a headless session that's no longer accepting prompts —
+ * either the controller cleaned it up (no summary) or its lifetime
+ * ran out (`remaining_lifetime_s <= 0`). Mirrors the corresponding
+ * `sessionState` computed in AgentCard. Infinite-lifetime sessions
+ * (`max_lifetime_s = 0`) are explicitly excluded so they stay
+ * promptable forever, matching the badge behavior on the card.
+ */
+const isExpired = computed<boolean>(() => {
+  if (!isPiSession.value && !isCcSession.value) return false;
+  const s = isPiSession.value
+    ? piexecState.summaries.get(props.agent.name)
+    : ccexecState.summaries.get(props.agent.name);
+  if (!s) return true;
+  if (s.max_lifetime_s === 0) return false;
+  return s.remaining_lifetime_s <= 0;
+});
+
+// Human label for the chat-header pill. Mirrors AgentCard's tagLabel
+// so a card and its chat header always show the same friendly name.
+// Headless controllers don't reach this component (RightPanel routes
+// them to the spawn forms instead), so the controller branch is omitted.
+const tagLabel = computed<string>(() => {
+  const a = props.agent.agent;
+  if (a === "claude-code" || a === "cc" || a === "ccc") return "CLAUDE CODE";
+  if (a === "openclaw" || a === "oc") return "OPENCLAW";
+  if (a === "pi") return "PI";
+  if (a === "hermes") return "HERMES";
+  if (a === "open-agent") return "OPEN AGENT";
+  return a.toUpperCase();
+});
+
+// Per-bucket color for the chat-header pill — keeps the visual language
+// consistent with the per-card AgentCard tag.
+const tagColor = computed<string>(() => {
+  switch (bucketOf(props.agent)) {
+    case BUCKETS.PI_AGENT:
+    case BUCKETS.PI_EXEC_SESSION:
+      return "var(--bucket-pi)";
+    case BUCKETS.CC_AGENT:
+    case BUCKETS.CC_EXEC_SESSION:
+      return "var(--bucket-cc)";
+    case BUCKETS.PI_EXEC_CONTROL:
+    case BUCKETS.CC_EXEC_CONTROL:
+      return "var(--bucket-headless)";
+    case BUCKETS.OPENCLAW:
+      return "var(--bucket-openclaw)";
+    case BUCKETS.HERMES:
+      return "var(--bucket-hermes)";
+    case BUCKETS.OPEN_AGENT:
+      return "var(--bucket-open-agent)";
+    default:
+      return "var(--bucket-other)";
+  }
+});
+
+const currentMessages = computed(() => messagesFor(props.agent.instanceId));
+
+const busy = computed(
+  () => getSession(props.agent.instanceId).activePromptId !== null,
+);
+
+const attachmentsOk = computed(
+  () => props.agent.promptEndpoint.attachmentsOk === true,
+);
+const maxPayloadBytes = computed(() => props.agent.promptEndpoint.maxPayloadBytes);
+
+async function onSubmit(text: string, files: File[]): Promise<void> {
+  const agent = props.agent;
+
+  let attachments: Awaited<ReturnType<typeof fileToAttachment>>[] | undefined;
+  if (files.length > 0) {
+    try {
+      attachments = await Promise.all(files.map(fileToAttachment));
+    } catch (e) {
+      error.value = `failed to read file: ${(e as Error).message}`;
+      return;
+    }
+  }
+
+  startPromptStream(agent, text, attachments);
+}
+
+function onQueryReply(message: Message, answer: string): void {
+  if (message.replied) return;
+  if (!message.promptId || !message.queryId) return;
+  bridge.queryReply(message.promptId, message.queryId, answer);
+  message.replied = true;
+  message.replyValue = answer;
+}
+
+function onStop(): void {
+  const s = getSession(props.agent.instanceId);
+  if (s.activePromptId) bridge.cancel(s.activePromptId);
+}
+</script>
+
+<template>
+  <section class="chat-pane" :style="{ '--tag-color': tagColor }">
+    <header class="chat-head">
+      <div class="chat-title">
+        <span class="chat-agent mono">{{ tagLabel }}</span>
+        <span class="chat-name">{{ agent.session ?? agent.name }}</span>
+        <span class="chat-owner mono">@{{ agent.owner }}</span>
+      </div>
+      <div class="chat-sub mono">{{ agent.promptEndpoint.subject }}</div>
+    </header>
+    <div v-if="error" class="error mono">{{ error }}</div>
+    <MessageList :messages="currentMessages" @reply="onQueryReply" />
+    <div v-if="isExpired" class="expired-banner mono">
+      Session expired — past messages are read-only. Start a new session to keep working.
+    </div>
+    <PromptArea
+      :busy="busy"
+      :disabled="isExpired"
+      :attachments-ok="attachmentsOk"
+      :max-payload-bytes="maxPayloadBytes"
+      @submit="onSubmit"
+      @stop="onStop"
+    />
+  </section>
+</template>
+
+<style scoped>
+.chat-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-deep);
+}
+.chat-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-primary);
+  border-bottom: var(--border-subtle);
+  flex-shrink: 0;
+}
+.chat-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+}
+.chat-agent {
+  font-size: var(--text-xs);
+  /* `--tag-color` is set on the .chat-pane wrapper (see template). Keeps
+     the chat-header pill in lockstep with the AgentCard pill in the grid. */
+  color: var(--tag-color, var(--accent-primary));
+  background: color-mix(in srgb, var(--tag-color, var(--accent-primary)) 14%, transparent);
+  padding: 1px 6px;
+  border-radius: var(--border-radius-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.chat-name {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.chat-owner { color: var(--text-muted); font-size: var(--text-xs); }
+.chat-sub {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+.error {
+  padding: var(--space-sm) var(--space-lg);
+  font-size: var(--text-xs);
+  color: var(--error);
+  background: var(--error-dim);
+  border-bottom: 1px solid rgba(248, 113, 113, 0.3);
+}
+.expired-banner {
+  padding: var(--space-sm) var(--space-lg);
+  font-size: var(--text-xs);
+  color: var(--error);
+  background: var(--error-dim);
+  border-top: 1px solid rgba(248, 113, 113, 0.3);
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+</style>

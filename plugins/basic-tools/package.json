@@ -1,0 +1,14 @@
+{
+  "name": "openclaw-plugin-basic-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.18"
+  }
+}
