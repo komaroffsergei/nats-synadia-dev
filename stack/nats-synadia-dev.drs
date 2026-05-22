@@ -2,7 +2,13 @@ Options name: 'nats-synadia-dev'
 
 HOST = 'nats-synadia-dev.*'
 APP_IMAGE = 'builder-registry.builder.giscloud.ru/trizna/nats-synadia-dev/app/main'
-NATS_URL = 'nats://nats-synadia-dev_nats:4222'
+DEFAULT_NATS_URL = 'nats://nats-synadia-dev_nats:4222'
+NATS_URL = ENV['NATS_URL'] || ENV['NATS_SERVERS'] || ENV['NATS_SERVICE_URL'] || DEFAULT_NATS_URL
+NATS_EXTERNAL_NETWORK = ENV['NATS_EXTERNAL_NETWORK']
+
+if NATS_EXTERNAL_NETWORK && !NATS_EXTERNAL_NETWORK.empty?
+  Network :nats_external, external: true, name: NATS_EXTERNAL_NETWORK
+end
 
 # Internal NATS bus for the demo.
 # Browser clients do not connect to this service directly:
@@ -17,10 +23,12 @@ end
 # - runs controller/persona/group-session agents in the same container.
 Service :app, image: APP_IMAGE, extra_hosts: ['ollama.h100.local:192.168.28.134'] do
   ingress host: HOST, port: 3300
+  network :nats_external if NATS_EXTERNAL_NETWORK && !NATS_EXTERNAL_NETWORK.empty?
 
   env HOST: '0.0.0.0',
       PORT: '3300',
       NATS_URL: NATS_URL,
+      START_BASIC_AGENTS: ENV['START_BASIC_AGENTS'] || 'true',
       BASIC_OWNER: 'demo',
       OLLAMA_BASE_URL: 'http://ollama.h100.local',
       OLLAMA_MODEL: 'qwen3:30b',

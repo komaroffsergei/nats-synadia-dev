@@ -44,12 +44,18 @@ const nc: NatsConnection = await natsConnect(connectOpts);
 const agents = new Agents({ nc });
 
 const serverInfoNote = config.servers
-  ? `servers=${config.servers}`
+  ? `servers=${redactNatsUrl(config.servers)}`
   : `context=${config.context ?? "current"}`;
 console.log(`[testui] NATS client connected (${serverInfoNote})`);
 
 const distDir = join(import.meta.dir, "..", "dist");
 const sdkVersionString = formatSdkProtocolVersion(SDK_PROTOCOL_VERSION);
+
+function redactNatsUrl(value: string): string {
+  // NATS URLs can carry token or user:password before `@`.
+  // Health checks and logs should show the endpoint, not secret material.
+  return value.replace(/((?:nats|tls|ws|wss)(?:\+[^:]+)?:\/\/)([^@,\/]+)@/g, "$1<redacted>@");
+}
 
 const server = Bun.serve<BridgeWsData>({
   hostname: config.host,
@@ -62,7 +68,7 @@ const server = Bun.serve<BridgeWsData>({
         ok: true,
         service: "synadia-nats-agents-web-ui",
         nats: config.servers
-          ? { mode: "servers", value: config.servers }
+          ? { mode: "servers", value: redactNatsUrl(config.servers) }
           : { mode: "context", value: config.context ?? "current" },
         sdkProtocolVersion: sdkVersionString,
       });

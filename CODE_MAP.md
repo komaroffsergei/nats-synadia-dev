@@ -24,7 +24,7 @@
   После рестарта process он исчезает. Для production это место можно заменить на NATS KV/JetStream.
 
 - `src/common.js` - общая конфигурация и helper-ы:
-  `NATS_URL`, `BASIC_OWNER`, `OLLAMA_BASE_URL`, `connectNats()`, `streamOllama()`.
+  `NATS_URL`, alias-ы `NATS_SERVERS`/`NATS_SERVICE_URL`, `BASIC_OWNER`, `OLLAMA_BASE_URL`, `connectNats()`, `streamOllama()`.
 
 - `src/personas.js` - список "личностей".
   Разные ответы получаются не из-за разных моделей, а из-за разных `systemPrompt`.
@@ -36,6 +36,7 @@
 
 - `examples/agent-web-ui/server/index.ts` - Bun HTTP/WebSocket server.
   Раздаёт `dist/`, держит `/ws`, отдаёт `/healthz` для deploy-smoke.
+  NATS можно задать через `--nats-url`, `--servers`, `NATS_URL`, `NATS_SERVERS`, `NATS_SERVICE_URL`.
 
 - `examples/agent-web-ui/server/bridge.ts` - bridge между browser WebSocket и `@synadia-ai/agents`.
   Делает discovery, prompt streaming, cancel/query reply, а также вызывает group endpoints controller-а.
@@ -59,6 +60,7 @@
 
 - `examples/agent-web-ui/src/composables/promptStreaming.ts` - сборка streaming events в сообщения чата.
 
+
 ## OpenClaw
 
 - `plugins/basic-tools/index.js` - локальный OpenClaw plugin.
@@ -77,13 +79,25 @@
 - `docker/Dockerfile` - production image: Node + Bun, UI build, запуск `scripts/start-production.js`.
 
 - `scripts/start-production.js` - один container entrypoint.
-  Ждёт NATS TCP, запускает controller и Bun UI server.
+  Ждёт NATS TCP, запускает Bun UI server и, если `START_BASIC_AGENTS` не выключен,
+  поднимает controller/persona agents рядом.
 
 - `docker/docker-compose.yml` - build-labels target для image `trizna/nats-synadia-dev/app/<branch>`.
 
 - `stack/nats-synadia-dev.drs` - dry-stack deployment:
   `nats` service + публичный `app` service на `nats-synadia-dev.gis-master.ru`.
+  `NATS_URL` внутри stack-а можно переопределить env-ами `NATS_URL`/`NATS_SERVERS`/`NATS_SERVICE_URL`.
+  `NATS_EXTERNAL_NETWORK` дополнительно подключает `app` к уже существующей docker network,
+  например `rag-stack_default` для NATS из `nats-agent-ruby`.
+  `START_BASIC_AGENTS=false` переводит production container в UI-only режим.
 
 - `stack/deploy.sh` - deploy wrapper с поддержкой GitLab SSH key variables и retry.
 
 - `docs/publishing/2026-05-22-publication-log.md` - журнал публикации, ошибок и решений без секретов.
+
+- `docs/NATS_CONNECTIONS.md` - найденные NATS endpoints:
+  local demo, production demo, `voice-chat` `audio_nats` и H100 leafnode endpoint.
+
+- `docs/DEPLOY_SCENARIOS.md` - варианты deploy-а:
+  isolated demo, UI-only dashboard поверх чужого NATS, UI + demo agents,
+  weather adapter, monitor service и reviewer/controller.

@@ -23,4 +23,4 @@ deploy:
   image: docker:27.5.1
   script:
     - docker build -t deploy/${CI_PROJECT_NAME} -f stack/Dockerfile.deploy stack
-    - docker run --rm --env-file <(env | grep -E '^CI_') -e DEPLOY_CONTEXT_ENDPOINT -e GIS_MASTER_SSH_PRIVATE_KEY_B64 -e DEPLOY_SSH_PRIVATE_KEY_B64 -e GIS_MASTER_SSH_PRIVATE_KEY -e DEPLOY_SSH_PRIVATE_KEY -e SSH_PRIVATE_KEY -e CI_SSH_PRIVATE_KEY -v /var/run/docker.sock:/var/run/docker.sock -v /root/.docker:/root/.docker -v ssh-agent-socket:/run/ssh-agent:ro deploy/${CI_PROJECT_NAME}
+    - docker run --rm --env-file <(env | grep -E '^CI_') -e DEPLOY_CONTEXT_ENDPOINT -e GIS_MASTER_SSH_PRIVATE_KEY_B64 -e DEPLOY_SSH_PRIVATE_KEY_B64 -e GIS_MASTER_SSH_PRIVATE_KEY -e DEPLOY_SSH_PRIVATE_KEY -e SSH_PRIVATE_KEY -e CI_SSH_PRIVATE_KEY -e NATS_URL -e NATS_SERVERS -e NATS_SERVICE_URL -e NATS_EXTERNAL_NETWORK -e START_BASIC_AGENTS -v /var/run/docker.sock:/var/run/docker.sock -v /root/.docker:/root/.docker -v ssh-agent-socket:/run/ssh-agent:ro deploy/${CI_PROJECT_NAME}

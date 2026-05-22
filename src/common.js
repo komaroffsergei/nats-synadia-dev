@@ -32,7 +32,7 @@ const textDecoder = new TextDecoder();
 export const BASIC_AGENT = "basic";
 export const BASIC_OWNER = env("BASIC_OWNER", "demo");
 export const CONTROL_NAME = "control";
-export const NATS_URL = env("NATS_URL", "nats://127.0.0.1:4222");
+export const NATS_URL = envAny(["NATS_URL", "NATS_SERVERS", "NATS_SERVICE_URL"], "nats://127.0.0.1:4222");
 // Ollama здесь выступает как самый простой локальный model backend.
 // Synadia/NATS отвечают только за транспорт и discovery, а текст генерирует
 // именно этот HTTP endpoint.
@@ -46,6 +46,17 @@ export function env(name, defaultValue = "") {
   // Это удобно для .env, где переменную могли оставить пустой.
   const value = process.env[name];
   return value && value.trim() ? value : defaultValue;
+}
+
+export function envAny(names, defaultValue = "") {
+  // Несколько alias-ов позволяют подключить сторонний NATS без переписывания
+  // проекта: NATS_URL - основной вариант, NATS_SERVERS/NATS_SERVICE_URL -
+  // удобные синонимы для UI bridge и внешних окружений.
+  for (const name of names) {
+    const value = process.env[name];
+    if (value && value.trim()) return value;
+  }
+  return defaultValue;
 }
 
 export async function connectNats(name) {

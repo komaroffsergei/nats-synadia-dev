@@ -11,9 +11,9 @@ import { dirname, join } from "node:path";
 //   npm run ui
 //
 // В Docker/Swarm нам нужен один browser-facing container, поэтому здесь
-// аккуратно поднимаем два процесса рядом:
+// аккуратно поднимаем один или два процесса рядом:
 //
-// 1. `node src/basic-controller.js`
+// 1. `node src/basic-controller.js` (можно выключить START_BASIC_AGENTS=false)
 //    Создаёт controller/persona/group-session agents и подключается к NATS.
 //
 // 2. `bun run server/index.ts`
@@ -26,8 +26,15 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(scriptDir, "..");
 const uiDir = join(rootDir, "examples", "agent-web-ui");
 
-const natsUrl = process.env.NATS_URL || "nats://nats-synadia-dev_nats:4222";
+const natsUrl =
+  process.env.NATS_URL ||
+  process.env.NATS_SERVERS ||
+  process.env.NATS_SERVICE_URL ||
+  "nats://nats-synadia-dev_nats:4222";
 const port = process.env.PORT || "3300";
+const startBasicAgents = !["0", "false", "no", "off"].includes(
+  String(process.env.START_BASIC_AGENTS || "true").toLowerCase(),
+);
 
 const childEnv = {
   ...process.env,
@@ -47,10 +54,21 @@ function parseTcpEndpoint(urlValue) {
   // Если NATS_URL содержит user:pass или token, URL parser их проигнорирует
   // для TCP check-а, но сами credentials останутся в NATS_URL и будут прочитаны
   // SDK уже при реальном подключении.
-  const parsed = new URL(urlValue);
+  const parsed = new URL(firstNatsUrl(urlValue));
   const host = parsed.hostname;
   const portNumber = Number(parsed.port || 4222);
   return { host, port: portNumber };
+}
+
+function redactNatsUrl(value) {
+  return String(value).replace(/((?:nats|tls|ws|wss)(?:\+[^:]+)?:\/\/)([^@,\/]+)@/g, "$1<redacted>@");
+}
+
+function firstNatsUrl(urlValue) {
+  // NATS clients могут принимать список servers через запятую. TCP wait check
+  // проверяет только первый endpoint: этого достаточно, чтобы не стартовать UI
+  // до доступности хотя бы одного явно указанного NATS service.
+  return String(urlValue).split(",")[0].trim();
 }
 
 async function waitForTcp(urlValue, timeoutMs = 60_000) {
@@ -77,11 +95,12 @@ async function waitForTcp(urlValue, timeoutMs = 60_000) {
     await sleep(1000);
   }
 
-  throw new Error(`NATS is not reachable after ${timeoutMs}ms: ${urlValue}`);
+  throw new Error(`NATS is not reachable after ${timeoutMs}ms: ${redactNatsUrl(urlValue)}`);
 }
 
 function start(label, command, args, options = {}) {
-  console.log(`[prod] starting ${label}: ${command} ${args.join(" ")}`);
+  const safeArgs = args.map((arg) => redactNatsUrl(arg));
+  console.log(`[prod] starting ${label}: ${command} ${safeArgs.join(" ")}`);
   const child = spawn(command, args, {
     cwd: options.cwd || rootDir,
     env: childEnv,
@@ -116,7 +135,12 @@ process.once("SIGTERM", () => stopAll("SIGTERM"));
 
 await waitForTcp(natsUrl);
 
-start("controller", "node", ["src/basic-controller.js"]);
-start("ui", "bun", ["run", "server/index.ts", "--host", process.env.HOST || "0.0.0.0", "--port", port, "--servers", natsUrl], {
+if (startBasicAgents) {
+  start("controller", "node", ["src/basic-controller.js"]);
+} else {
+  console.log("[prod] START_BASIC_AGENTS=false, starting UI bridge only");
+}
+
+start("ui", "bun", ["run", "server/index.ts", "--host", process.env.HOST || "0.0.0.0", "--port", port], {
   cwd: uiDir,
 });

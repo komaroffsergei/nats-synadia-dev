@@ -5,7 +5,7 @@
 // Явный `--context` или `NATS_CONTEXT` всё ещё включает context-based connect.
 //
 //   bun run server/index.ts [--port 3300] [--context current]
-//                           [--servers nats://...] [--dev]
+//                           [--nats-url nats://...] [--servers nats://...] [--dev]
 
 export type ServerConfig = {
   host: string;
@@ -39,7 +39,12 @@ export function parseConfig(argv: string[]): ServerConfig {
 
   const contextFlag = pickFlag("--context");
   const contextEnv = process.env["NATS_CONTEXT"];
-  const explicitServers = pickFlag("--servers") ?? process.env["NATS_URL"];
+  const explicitServers =
+    pickFlag("--nats-url") ??
+    pickFlag("--servers") ??
+    process.env["NATS_URL"] ??
+    process.env["NATS_SERVERS"] ??
+    process.env["NATS_SERVICE_URL"];
   const dev = hasFlag("--dev");
 
   // Если raw servers указан явно, он побеждает.

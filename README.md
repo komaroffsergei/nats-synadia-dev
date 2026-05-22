@@ -20,6 +20,8 @@ Synadia Vue UI
 - [docs/diagrams/chat-prompt-sequence.png](docs/diagrams/chat-prompt-sequence.png) - последовательность обычного prompt-а в одного agent-а.
 - [docs/diagrams/group-session-sequence.png](docs/diagrams/group-session-sequence.png) - последовательность вызовов при групповом вопросе.
 - [docs/diagrams/deployment.png](docs/diagrams/deployment.png) - публикация через GitLab CI, Docker registry и dry-stack на `gis-master.ru`.
+- [docs/NATS_CONNECTIONS.md](docs/NATS_CONNECTIONS.md) - какие NATS endpoints найдены локально, на `gis-master` и около H100.
+- [docs/DEPLOY_SCENARIOS.md](docs/DEPLOY_SCENARIOS.md) - что можно деплоить поверх текущего UI/NATS bridge и зачем это нужно.
 - [docs/publishing/2026-05-22-publication-log.md](docs/publishing/2026-05-22-publication-log.md) - журнал публикации и ошибок без секретов.
 
 ### Общая архитектура
@@ -155,6 +157,13 @@ bun install
 
 ```text
 NATS_URL=nats://127.0.0.1:4222
+# Можно использовать alias-ы для внешнего NATS:
+# NATS_SERVERS=nats://host:4222
+# NATS_SERVICE_URL=nats://host:4222
+# Для deploy: подключить app container к существующей docker network.
+# Например, чтобы увидеть внутренний NATS другого stack-а на gis-master:
+# NATS_EXTERNAL_NETWORK=rag-stack_default
+START_BASIC_AGENTS=true
 BASIC_OWNER=demo
 OLLAMA_BASE_URL=http://ollama.h100.local
 OLLAMA_MODEL=qwen3.5:9b
@@ -201,6 +210,43 @@ Healthcheck production server-а:
 ```sh
 curl --noproxy '*' http://localhost:3300/healthz
 ```
+
+Подключить UI/agents к стороннему NATS:
+
+```sh
+NATS_URL=nats://host:4222 npm run controller
+cd examples/agent-web-ui
+bun run server/index.ts --nats-url nats://host:4222 --dev
+```
+
+То же самое через env alias-ы:
+
+```sh
+NATS_SERVERS=nats://host:4222 npm run ui:bridge
+NATS_SERVICE_URL=nats://host:4222 npm run controller
+```
+
+Приоритет настроек: `NATS_URL` -> `NATS_SERVERS` -> `NATS_SERVICE_URL` ->
+локальный default `nats://127.0.0.1:4222`. В production
+`stack/nats-synadia-dev.drs` читает эти же env, поэтому GitLab/Swarm можно
+переключить на внешний NATS без изменения кода.
+
+Для production deploy к внутреннему NATS другого stack-а нужно два параметра:
+
+```text
+NATS_EXTERNAL_NETWORK=rag-stack_default
+NATS_URL=nats://<user>:<password>@rag-stack_inference_nats:4222
+START_BASIC_AGENTS=false
+```
+
+`NATS_EXTERNAL_NETWORK` даёт контейнеру сетевой доступ/DNS, а `NATS_URL`
+говорит SDK, куда подключаться. Пароль не хранится в коде: его передаём через
+GitLab pipeline variables.
+
+`START_BASIC_AGENTS=false` выключает наши учебные `basic.demo.*` agents и
+оставляет только UI bridge. Это удобно, когда нужно аккуратно посмотреть чужую
+NATS-шину, например `agents.prompt.weather.dev.h100`, без регистрации
+дополнительных demo services.
 
 ## Как работает UI
 

@@ -47,9 +47,20 @@ nats://127.0.0.1:4222
 
 ```bash
 NATS_URL=nats://host:4222 bun run dev
+bun run server/index.ts --nats-url nats://host:4222 --dev
 bun run server/index.ts --servers nats://host:4222 --dev
 bun run server/index.ts --context current --dev
 ```
+
+Env alias-ы тоже поддерживаются:
+
+```bash
+NATS_SERVERS=nats://host:4222 bun run dev
+NATS_SERVICE_URL=nats://host:4222 bun run dev
+```
+
+Если URL содержит token или `user:password`, `/healthz` и server log показывают
+адрес с redaction, без secret material.
 
 ## Групповой prompt
 
