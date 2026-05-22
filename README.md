@@ -354,7 +354,7 @@ Remote для публикации:
 git remote set-url origin https://git.giscloud.ru/trizna/nats-synadia-dev.git
 ```
 
-Pipeline устроен по аналогии с `webrtc-komaroff`:
+Pipeline сборки:
 
 ```text
 push to GitLab
