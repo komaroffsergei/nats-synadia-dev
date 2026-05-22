@@ -363,3 +363,19 @@ curl --noproxy '*' http://ollama.h100.local/api/chat
 
 - заменить `OLLAMA_BASE_URL` в `stack/nats-synadia-dev.drs` и `docker/Dockerfile` на `http://ollama.h100.local`;
 - улучшить текст ошибки в `src/common.js` для 404, чтобы сразу было понятно, что base URL не является прямым Ollama endpoint.
+
+После deploy `58b4ce4` pipeline `2534` прошёл успешно, но WebSocket smoke показал новую ошибку:
+
+```text
+handler error: Ollama недоступна: http://ollama.h100.local ... Причина: fetch failed
+```
+
+Причина: из app container имя `ollama.h100.local` не резолвится/не маршрутизируется так же, как с рабочей машины. При этом сам HTTP endpoint на `192.168.28.134` требует Host header `ollama.h100.local`: прямой `http://192.168.28.134/api/tags` даёт 404, а `Host: ollama.h100.local` даёт 200.
+
+Решение: добавить в dry-stack app service:
+
+```ruby
+extra_hosts: ['ollama.h100.local:192.168.28.134']
+```
+
+Так container будет ходить на нужный IP, но HTTP Host останется `ollama.h100.local`.

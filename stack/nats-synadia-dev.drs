@@ -15,7 +15,7 @@ end
 # - serves the built Vue UI;
 # - keeps WebSocket endpoint /ws;
 # - runs controller/persona/group-session agents in the same container.
-Service :app, image: APP_IMAGE do
+Service :app, image: APP_IMAGE, extra_hosts: ['ollama.h100.local:192.168.28.134'] do
   ingress host: HOST, port: 3300
 
   env HOST: '0.0.0.0',
