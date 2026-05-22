@@ -65,6 +65,17 @@ selected agents
   -> controller собирает ответы persona agents и хранит общий context
 ```
 
+Удаление идёт тем же маршрутом, только через `basic-group-stop`:
+
+```text
+кнопка × на карточке BASIC GROUP
+  -> basicGroupStop(control.instanceId, group.metadata.group_id)
+  -> basic-group-stop через Bun bridge
+  -> agents.group.stop.basic.demo.control
+  -> controller останавливает group-N
+  -> UI убирает карточку и чистит local chat state
+```
+
 Это ровно тот механизм, который нужен для учебного сценария:
 один вопрос уходит нескольким persona agents, а разные ответы появляются из-за
 разных `systemPrompt` в `src/personas.js`.

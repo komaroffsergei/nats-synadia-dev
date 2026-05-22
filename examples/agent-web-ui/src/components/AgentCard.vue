@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import AgentStatusDot from "./AgentStatusDot.vue";
 import type { DiscoveredAgentDTO } from "../wire.ts";
-import { bucketOf, BUCKETS, type Bucket } from "../stores/agents.ts";
+import { basicController, bucketOf, BUCKETS, removeAgent, type Bucket } from "../stores/agents.ts";
+import { clearSession } from "../stores/chat.ts";
 import { selectionState, toggleSelection } from "../stores/selection.ts";
+import { useBridge } from "../composables/useBridge.ts";
 
 const props = defineProps<{
   agent: DiscoveredAgentDTO;
@@ -11,6 +13,10 @@ const props = defineProps<{
 }>();
 
 defineEmits<{ select: [instanceId: string] }>();
+
+const bridge = useBridge();
+const stoppingGroup = ref(false);
+const stopError = ref<string | null>(null);
 
 const bucket = computed<Bucket>(() => bucketOf(props.agent));
 
@@ -64,6 +70,7 @@ const humanPayload = computed(() => {
 
 const model = computed(() => props.agent.metadata?.["model"] ?? null);
 const targetPersonas = computed(() => props.agent.metadata?.["target_personas"] ?? null);
+const groupStopId = computed(() => props.agent.metadata?.["group_id"] ?? props.agent.name);
 
 const multiSelectable = computed(() => isBasicPersona.value);
 const isMultiSelected = computed(() => selectionState.ids.has(props.agent.instanceId));
@@ -71,6 +78,41 @@ const isMultiSelected = computed(() => selectionState.ids.has(props.agent.instan
 function onToggleSelect(e: Event): void {
   e.stopPropagation();
   toggleSelection(props.agent.instanceId);
+}
+
+async function onStopGroup(e: Event): Promise<void> {
+  e.preventDefault();
+  e.stopPropagation();
+  if (!isBasicGroupSession.value || stoppingGroup.value) return;
+
+  // UI не знает NATS subject `group.stop` напрямую. Он просит найденный
+  // BASIC CONTROL сделать stop, а Bun bridge уже отправляет NATS request.
+  const controller = basicController.value;
+  if (!controller) {
+    stopError.value = "BASIC CONTROL не найден";
+    return;
+  }
+
+  const groupId = groupStopId.value.trim();
+  if (!groupId) {
+    stopError.value = "у group session нет group_id/name";
+    return;
+  }
+
+  stoppingGroup.value = true;
+  stopError.value = null;
+  try {
+    await bridge.basicGroupStop(controller.instanceId, groupId);
+
+    // Bridge обычно сам пришлёт `agent-removed`, но локальная очистка делает
+    // поведение мгновенным и безопасным, если событие уже было обработано.
+    clearSession(props.agent.instanceId);
+    removeAgent(props.agent.instanceId);
+  } catch (err) {
+    stopError.value = (err as Error).message;
+  } finally {
+    stoppingGroup.value = false;
+  }
 }
 </script>
 
@@ -117,7 +159,23 @@ function onToggleSelect(e: Event): void {
           <span class="agent-tag mono">{{ tagLabel }}</span>
           <span v-if="isController" class="role-badge mono">CONTROLLER</span>
         </div>
-        <AgentStatusDot class="status-led" :instance-id="agent.instanceId" />
+        <div class="head-actions">
+          <button
+            v-if="isBasicGroupSession"
+            type="button"
+            class="stop-group-btn"
+            :class="{ busy: stoppingGroup }"
+            :disabled="stoppingGroup"
+            title="Удалить group session"
+            aria-label="Удалить group session"
+            @click="onStopGroup"
+            @keydown.stop
+          >
+            <span v-if="stoppingGroup" class="mono">...</span>
+            <span v-else aria-hidden="true">×</span>
+          </button>
+          <AgentStatusDot class="status-led" :instance-id="agent.instanceId" />
+        </div>
       </header>
 
       <h3 class="card-title">{{ subtitle }}</h3>
@@ -142,6 +200,7 @@ function onToggleSelect(e: Event): void {
 
       <p v-if="isController" class="hint">создаёт group sessions</p>
       <p v-else-if="isBasicGroupSession" class="hint">хранит общий контекст группы</p>
+      <p v-if="stopError" class="stop-error mono">{{ stopError }}</p>
     </div>
   </div>
 </template>
@@ -207,7 +266,43 @@ function onToggleSelect(e: Event): void {
   min-width: 0;
   flex-wrap: wrap;
 }
+.head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
 .status-led { flex-shrink: 0; }
+
+.stop-group-btn {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--error) 38%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--error) 9%, transparent);
+  color: var(--error);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.stop-group-btn:hover:not(:disabled),
+.stop-group-btn:focus-visible {
+  border-color: var(--error);
+  background: color-mix(in srgb, var(--error) 18%, transparent);
+  outline: none;
+}
+.stop-group-btn:disabled {
+  cursor: wait;
+  opacity: 0.75;
+}
+.stop-group-btn.busy {
+  font-size: var(--text-xs);
+}
 
 .select-circle {
   width: 18px;
@@ -320,5 +415,12 @@ function onToggleSelect(e: Event): void {
   color: var(--text-dim);
   margin: var(--space-xs) 0 0;
   font-style: italic;
+}
+.stop-error {
+  margin: var(--space-xs) 0 0;
+  color: var(--error);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
 }
 </style>

@@ -468,15 +468,17 @@ async function stopGroupSession(payload) {
   // Останавливает динамический group session agent и убирает его из discovery.
   const id = String(payload.group_id ?? payload.session_id ?? payload.name ?? "").trim();
   if (!id) throw new Error("group.stop requires group_id or session_id");
-  const record = groupSessions.get(id);
+  const record =
+    groupSessions.get(id) ??
+    Array.from(groupSessions.values()).find((group) => group.name === id || group.label === id);
   if (!record) throw new Error(`group session not found: ${id}`);
   await record.service.stop();
-  groupSessions.delete(id);
+  groupSessions.delete(record.id);
   const index = services.indexOf(record.service);
   if (index >= 0) services.splice(index, 1);
   return {
     stopped: true,
-    group_id: id,
+    group_id: record.id,
   };
 }
 

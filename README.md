@@ -15,13 +15,83 @@ Synadia Vue UI
 
 ## Документация и схемы
 
-- [CODE_MAP.md](CODE_MAP.md) - карта ключевых файлов и мест, где реализован функционал.
+- [CODE_MAP.md](CODE_MAP.md) - подробная карта кода: где искать runtime, UI, OpenClaw и deploy.
 - [docs/diagrams/architecture.png](docs/diagrams/architecture.png) - связь UI, Bun bridge, NATS, controller, persona agents, group sessions и OpenClaw.
+- [docs/diagrams/chat-prompt-sequence.png](docs/diagrams/chat-prompt-sequence.png) - последовательность обычного prompt-а в одного agent-а.
 - [docs/diagrams/group-session-sequence.png](docs/diagrams/group-session-sequence.png) - последовательность вызовов при групповом вопросе.
 - [docs/diagrams/deployment.png](docs/diagrams/deployment.png) - публикация через GitLab CI, Docker registry и dry-stack на `gis-master.ru`.
 - [docs/publishing/2026-05-22-publication-log.md](docs/publishing/2026-05-22-publication-log.md) - журнал публикации и ошибок без секретов.
 
+### Общая архитектура
+
+Описание: схема отвечает на вопрос "какие крупные части вообще есть в
+проекте". На ней видны browser UI, Bun bridge, Synadia SDK, NATS, controller,
+persona agents, group sessions, OpenClaw и Ollama.
+
+Как читать: слева направо показан путь данных. Браузер не подключается к NATS
+напрямую: он говорит только с Bun bridge по `/ws`, а bridge уже использует SDK и
+NATS subjects.
+
+Где смотреть код: `examples/agent-web-ui/server/bridge.ts`,
+`src/basic-controller.js`, `src/common.js`, `plugins/basic-tools/index.js`.
+
 ![Архитектура](docs/diagrams/architecture.png)
+
+### Sequence: prompt в одного agent-а
+
+Описание: это UML-like диаграмма последовательности для самого простого
+сценария: пользователь пишет сообщение в чат `teacher`, UI отправляет prompt,
+agent вызывает Ollama и возвращает streaming chunks обратно в браузер.
+
+Как читать: сверху перечислены участники, вниз идёт время. Сплошные стрелки -
+запросы вперёд, пунктирные стрелки - ответы и streaming events назад.
+
+Где смотреть код: `examples/agent-web-ui/src/composables/promptStreaming.ts`,
+`examples/agent-web-ui/server/bridge.ts`, `src/basic-controller.js`,
+`src/common.js`.
+
+![Prompt sequence](docs/diagrams/chat-prompt-sequence.png)
+
+### Group session через controller
+
+Описание: схема показывает групповой сценарий после выбора нескольких agents
+галочками. Controller создаёт динамический `group-N` agent, UI отправляет prompt
+уже в него, group session собирает ответы выбранных persona agents и делает
+итоговый synthesis.
+
+Как читать: сверху вниз показаны шаги одного группового вопроса. Главное отличие
+от обычного prompt-а: общий context хранится не в браузере, а в памяти controller
+process внутри `groupSessions`.
+
+Где смотреть код: `examples/agent-web-ui/src/components/MultiSelectBar.vue`,
+`examples/agent-web-ui/server/bridge.ts`, `src/basic-controller.js`
+(`createGroupSession()`, `streamGroupAnswer()`, `groupSessions`).
+
+![Group session sequence](docs/diagrams/group-session-sequence.png)
+
+### Публикация на gis-master.ru
+
+Описание: схема показывает production path публикации проекта. После push в
+GitLab runner собирает Docker image, отправляет его в registry, а deploy job
+через `dry-stack swarm_deploy` обновляет stack на `gis-master.ru`.
+
+Как читать: слева направо показан путь артефакта: GitLab repo -> CI build ->
+registry -> dry-stack deploy -> Swarm services -> Traefik -> browser.
+
+Где смотреть код: `.gitlab-ci.yml`, `docker/Dockerfile`,
+`docker/build-images.sh`, `stack/nats-synadia-dev.drs`, `stack/deploy.sh`.
+
+![Deployment](docs/diagrams/deployment.png)
+
+### Что смотреть в CODE_MAP.md
+
+`CODE_MAP.md` - это быстрый навигатор по проекту, чтобы не искать вручную, где
+реализован конкретный кусок поведения.
+
+- `Runtime` - `src/basic-controller.js`, `src/common.js`, `src/personas.js`, общий context групп, создание controller и dynamic group sessions.
+- `Web UI` - `examples/agent-web-ui/server/*`, `src/stores/*`, `MultiSelectBar.vue`, `ChatPanel.vue`, WebSocket bridge и frontend state.
+- `OpenClaw` - `plugins/basic-tools/*` и scripts подготовки official Synadia NATS channel.
+- `Публикация` - `.gitlab-ci.yml`, `docker/*`, `stack/nats-synadia-dev.drs`, `scripts/start-production.js`.
 
 ## Что здесь есть
 
@@ -171,6 +241,13 @@ Bun bridge держит один NATS client, делает discovery через 
 Важно: для `basic` persona agents группа создаётся controller-ом как настоящий
 NATS agent. Именно эта session хранит общий контекст прошлых групповых сообщений
 в памяти controller process.
+
+Удалить созданную `BASIC GROUP` можно прямо из интерфейса: нажми `×` на карточке
+группы. UI найдёт `BASIC CONTROL`, возьмёт технический
+`group.metadata.group_id` (`group-1`, `group-2`, ...), вызовет
+`basicGroupStop(control.instanceId, groupId)`, controller остановит динамический
+NATS agent, а браузер уберёт карточку и очистит локальную историю чата этой
+group session.
 
 Оценить ответы всех agents:
 

@@ -52,6 +52,9 @@
 - `examples/agent-web-ui/src/components/MultiSelectBar.vue` - групповой prompt из UI.
   Если выбраны basic personas, компонент просит controller создать group session и отправляет первый prompt уже в `group-N`.
 
+- `examples/agent-web-ui/src/components/AgentCard.vue` - карточка agent-а.
+  Для `BASIC GROUP` здесь находится кнопка `×`: она ищет `BASIC CONTROL`, вызывает `basicGroupStop()`, убирает карточку и чистит локальный chat state.
+
 - `examples/agent-web-ui/src/components/ChatPanel.vue` - правый чат выбранного agent-а или group session.
 
 - `examples/agent-web-ui/src/composables/promptStreaming.ts` - сборка streaming events в сообщения чата.
