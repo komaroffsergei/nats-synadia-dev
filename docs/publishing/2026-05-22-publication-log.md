@@ -454,3 +454,61 @@ basic-group-stop -> stopped group-1
 
 Результат: кнопка удаления `BASIC GROUP` опубликована, а production bridge
 успешно останавливает динамическую group session по техническому `group_id`.
+
+### 2026-05-22T12:37:00+03:00
+
+Публикация weather adapter-а для внешнего NATS `nats-agent-ruby`.
+
+Изменения:
+
+- добавлена форма `lat/lon` для `agents.prompt.weather.dev.h100`;
+- добавлены примеры запросов "Йошкар-Ола", "Омск", "Сводка";
+- WebSocket wire contract расширен полем `extra`;
+- bridge отправляет custom NATS envelope с `prompt`, `lat`, `lon`;
+- generic agents по-прежнему идут через обычный `Agent.prompt()`.
+
+Локальные проверки:
+
+```text
+bun run typecheck -> success
+bun run build -> success
+node --check scripts/start-production.js && node --check src/common.js -> success
+```
+
+Push:
+
+```text
+commit 9b7bc0f feat: добавить weather adapter для prompt extra
+git push -o ci.skip origin main -> success
+```
+
+Причина `ci.skip`: обычный push pipeline запустил бы deploy без внешних NATS
+variables и временно переключил бы сервис обратно на local demo NATS.
+
+Ручной pipeline с external NATS variables:
+
+```text
+pipeline 2544 -> success
+build push -> success
+deploy -> success
+```
+
+Production checks:
+
+```text
+https://nats-synadia-dev.gis-master.ru/healthz -> HTTP 200
+healthz nats -> nats://<redacted>@rag-stack_inference_nats:4222
+discovery -> agents.prompt.weather.dev.h100
+```
+
+End-to-end smoke через публичный WebSocket:
+
+```text
+prompt: "как погода в йошкар оле? кратко: температура, осадки, облачность"
+extra:  { lat: 56.6328, lon: 47.8951 }
+status: ack -> done
+result: weather answer received
+```
+
+Наблюдение: сразу после Swarm update был краткий `504` на `/healthz`, но через
+несколько секунд service стабилизировался и дальше стабильно возвращал `200`.
