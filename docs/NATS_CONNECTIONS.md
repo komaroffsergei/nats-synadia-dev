@@ -81,9 +81,23 @@ agents.status.weather.dev.h100
 ```
 
 Ограничение: generic prompt из нашего UI не передаёт `lat/lon` в `extra`, а
-weather agent в соседнем проекте может ожидать координаты. Поэтому первый
-smoke-test - discovery agent-а; полноценный weather prompt может потребовать
-маленький adapter/form для `extra.lat` и `extra.lon`.
+weather agent в соседнем проекте ожидает координаты. Текущая Ruby-реализация
+может извлечь координаты из текста, поэтому рабочий smoke prompt выглядит так:
+
+```text
+lat=54.9885 lon=73.3242. Кратко опиши текущую погоду для проверки связи.
+```
+
+Для удобного production UX лучше добавить маленький adapter/form для
+`extra.lat` и `extra.lon`.
+
+Проверено после deploy 2026-05-22:
+
+```text
+healthz nats: nats://<redacted>@rag-stack_inference_nats:4222
+discovery:    agents.prompt.weather.dev.h100
+prompt:       ack -> done, ответ получен
+```
 
 ## Voice-chat Audio NATS
 
