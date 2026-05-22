@@ -1,0 +1,13 @@
+FROM ruby:3.4.4-slim-bookworm AS base
+
+RUN apt update && apt install -y --no-install-recommends openssh-client ca-certificates
+RUN gem install build-labels:0.0.76 dry-stack:0.1.53
+RUN install-docker-static 28
+RUN ruby -e 'g=Gem::Specification.find_by_name("dry-stack","0.1.53").gem_dir; f=File.join(g,"lib/dry-stack/command_swarm_deploy.rb"); s=File.read(f); s=s.sub("stack.description", "stack.description.to_s"); File.write(f,s)'
+
+WORKDIR /build
+RUN mkdir -p /root/.ssh && mkdir -pv /root/.ssh/sockets
+RUN printf 'Host *\n\tControlPersist yes\n\tControlMaster auto\n\tControlPath  /root/.ssh/sockets/%%r@%%h-%%p\n\tBatchMode yes\n\tStrictHostKeyChecking no\n\tServerAliveInterval 15\n\tServerAliveCountMax 3\n\tConnectionAttempts 3\n\tPort 22\n' > /root/.ssh/config
+ADD . .
+
+CMD ["sh", "/build/deploy.sh"]

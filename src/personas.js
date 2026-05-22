@@ -114,8 +114,7 @@ export function resolvePersona(id = DEFAULT_PERSONA_ID) {
 
 export function resolvePersonaList(ids) {
   // Если ручной API ничего не выбрал, берём всех.
-  // В Synadia UI основной групповой сценарий живёт в virtual session,
-  // но helper оставляем полезным для CLI/тестов.
+  // Этот helper использует controller group.create и CLI/тестовые сценарии.
   //
   // Set убирает дубли: если caller передал ["teacher", "teacher"], модель
   // не будет дважды отвечать одной и той же ролью.

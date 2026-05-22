@@ -52,9 +52,21 @@ const distDir = join(import.meta.dir, "..", "dist");
 const sdkVersionString = formatSdkProtocolVersion(SDK_PROTOCOL_VERSION);
 
 const server = Bun.serve<BridgeWsData>({
+  hostname: config.host,
   port: config.port,
   async fetch(req, srv) {
     const url = new URL(req.url);
+
+    if (url.pathname === "/healthz") {
+      return Response.json({
+        ok: true,
+        service: "synadia-nats-agents-web-ui",
+        nats: config.servers
+          ? { mode: "servers", value: config.servers }
+          : { mode: "context", value: config.context ?? "current" },
+        sdkProtocolVersion: sdkVersionString,
+      });
+    }
 
     if (url.pathname === "/ws") {
       const bridge = new Bridge(agents, nc, sdkVersionString);
@@ -106,7 +118,7 @@ const server = Bun.serve<BridgeWsData>({
   },
 });
 
-console.log(`[testui] listening on http://localhost:${server.port} (sdk protocol ${sdkVersionString})`);
+console.log(`[testui] listening on http://${config.host}:${server.port} (sdk protocol ${sdkVersionString})`);
 if (config.dev) {
   console.log(`[testui] dev mode — open http://localhost:5173 (Vite)`);
 } else if (!existsSync(distDir)) {

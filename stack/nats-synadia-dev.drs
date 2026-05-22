@@ -1,0 +1,30 @@
+Options name: 'nats-synadia-dev'
+
+HOST = 'nats-synadia-dev.*'
+APP_IMAGE = 'builder-registry.builder.giscloud.ru/trizna/nats-synadia-dev/app/main'
+NATS_URL = 'nats://nats-synadia-dev_nats:4222'
+
+# Internal NATS bus for the demo.
+# Browser clients do not connect to this service directly:
+# the browser talks to app:/ws, and the Bun bridge talks to NATS.
+Service :nats, image: 'nats:2.11.6-scratch' do
+  command ['-js', '-m', '8222']
+end
+
+# Single public service:
+# - serves the built Vue UI;
+# - keeps WebSocket endpoint /ws;
+# - runs controller/persona/group-session agents in the same container.
+Service :app, image: APP_IMAGE do
+  ingress host: HOST, port: 3300
+
+  env HOST: '0.0.0.0',
+      PORT: '3300',
+      NATS_URL: NATS_URL,
+      BASIC_OWNER: 'demo',
+      OLLAMA_BASE_URL: 'https://nats2ollama.gis-master.ru',
+      OLLAMA_MODEL: 'qwen3:30b',
+      OLLAMA_STREAM: 'false',
+      OLLAMA_THINK: 'false',
+      OLLAMA_TIMEOUT_MS: '180000'
+end

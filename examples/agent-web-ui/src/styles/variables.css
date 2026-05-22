@@ -38,15 +38,10 @@
 
   /* Bucket / agent-family palette: маленькие цвета только для agent-tag pill.
      Вся карточка не красится, чтобы UI оставался спокойной infra-консолью. */
-  --bucket-pi: var(--memory-fact);          /* indigo */
-  --bucket-cc: var(--memory-note);          /* cyan */
   --bucket-headless: var(--memory-preference); /* violet — controllers */
   --bucket-openclaw: #ef4444;               /* red */
-  --bucket-hermes: #f59e0b;                 /* amber / orange */
-  --bucket-open-agent: #34d399;             /* emerald — open-agent bridge */
   --bucket-other: var(--text-muted);        /* muted gray */
-  --bucket-virtual: #e879f9;                /* fuchsia — UI-only virtual sessions
-                                                that fan out to N real agents */
+  --bucket-virtual: #e879f9;                /* fuchsia — controller group sessions */
 
   /* Typography */
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',

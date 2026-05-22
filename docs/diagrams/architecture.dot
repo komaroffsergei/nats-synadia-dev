@@ -1,0 +1,52 @@
+digraph G {
+  graph [
+    rankdir=LR,
+    bgcolor="white",
+    pad="0.4",
+    nodesep="0.65",
+    ranksep="0.85",
+    fontname="Arial",
+    label="synadia-nats-agents: связь компонентов",
+    labelloc="t",
+    fontsize=22
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Arial",
+    fontsize=12,
+    color="#334155",
+    fillcolor="#f8fafc"
+  ];
+
+  edge [
+    fontname="Arial",
+    fontsize=11,
+    color="#475569",
+    arrowsize=0.8
+  ];
+
+  browser [label="Browser\nVue UI", fillcolor="#dbeafe"];
+  bridge [label="Bun bridge\nexamples/agent-web-ui/server", fillcolor="#e0f2fe"];
+  sdk [label="@synadia-ai/agents\nClient + discovery", fillcolor="#ecfeff"];
+  nats [label="NATS\nsubjects + request/reply", fillcolor="#dcfce7"];
+  controller [label="basic controller\nmetadata.role=controller", fillcolor="#f3e8ff"];
+  personas [label="persona agents\nteacher / engineer / skeptic /\nmanager / moderator", fillcolor="#ede9fe"];
+  groups [label="dynamic group sessions\ngroup-1 / group-2 / ...", fillcolor="#fae8ff"];
+  ollama [label="Ollama HTTP API\n/api/chat", fillcolor="#fee2e2"];
+  openclaw [label="OpenClaw\n/basic command + tool", fillcolor="#ffedd5"];
+
+  browser -> bridge [label="WebSocket /ws"];
+  bridge -> sdk [label="discover / prompt / cancel"];
+  sdk -> nats [label="$SRV.INFO.agents\nagents.prompt.*"];
+  nats -> controller [label="control prompt\nextra endpoints"];
+  nats -> personas [label="persona prompts"];
+  controller -> groups [label="create/stop\nAgentService"];
+  groups -> personas [label="fan-out по выбранным ролям"];
+  controller -> personas [label="default delegation\nreview/moderator"];
+  personas -> ollama [label="systemPrompt + user prompt"];
+  groups -> ollama [label="final synthesis"];
+  openclaw -> nats [label="official NATS channel"];
+  openclaw -> controller [label="/basic -> basic_ask"];
+}

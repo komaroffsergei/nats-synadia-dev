@@ -13,6 +13,16 @@ Synadia Vue UI
   -> streaming responses
 ```
 
+## Документация и схемы
+
+- [CODE_MAP.md](CODE_MAP.md) - карта ключевых файлов и мест, где реализован функционал.
+- [docs/diagrams/architecture.png](docs/diagrams/architecture.png) - связь UI, Bun bridge, NATS, controller, persona agents, group sessions и OpenClaw.
+- [docs/diagrams/group-session-sequence.png](docs/diagrams/group-session-sequence.png) - последовательность вызовов при групповом вопросе.
+- [docs/diagrams/deployment.png](docs/diagrams/deployment.png) - публикация через GitLab CI, Docker registry и dry-stack на `gis-master.ru`.
+- [docs/publishing/2026-05-22-publication-log.md](docs/publishing/2026-05-22-publication-log.md) - журнал публикации и ошибок без секретов.
+
+![Архитектура](docs/diagrams/architecture.png)
+
 ## Что здесь есть
 
 - `src/basic-controller.js` - запускает controller и пять persona agents.
@@ -116,6 +126,12 @@ npm run ui
 http://localhost:3300
 ```
 
+Healthcheck production server-а:
+
+```sh
+curl --noproxy '*' http://localhost:3300/healthz
+```
+
 ## Как работает UI
 
 Браузер не подключается к NATS напрямую.
@@ -152,15 +168,14 @@ Bun bridge держит один NATS client, делает discovery через 
 5. UI откроет карточку group-1 и отправит туда первый prompt.
 ```
 
-Важно: для `basic` persona agents группа теперь создаётся controller-ом как
-настоящий NATS agent. Именно эта session хранит общий контекст прошлых групповых
-сообщений. Browser-only virtual session остался fallback-ом для других agents,
-которыми наш controller не управляет.
+Важно: для `basic` persona agents группа создаётся controller-ом как настоящий
+NATS agent. Именно эта session хранит общий контекст прошлых групповых сообщений
+в памяти controller process.
 
 Оценить ответы всех agents:
 
 ```text
-1. Дождись ответов в virtual session.
+1. Дождись ответа в controller group session.
 2. В поле "Как moderator должен оценивать ответы?" напиши критерий:
    "оцени по полноте и практической пользе".
 3. Нажми "Оценить ответы".
@@ -205,10 +220,9 @@ agents.status.basic.demo.group-1
 agents.hb.basic.demo.group-1
 ```
 
-Такие sessions создаются динамически через controller. Они отличаются от
-browser-only virtual session тем, что это настоящие NATS agents: их видно через
-discovery, у них есть собственный prompt subject, а общий контекст группы
-хранится в controller process.
+Такие sessions создаются динамически через controller. Это настоящие NATS
+agents: их видно через discovery, у них есть собственный prompt subject, а общий
+контекст группы хранится в controller process.
 
 OpenClaw official channel:
 
@@ -330,4 +344,39 @@ cd examples/agent-web-ui && bun run typecheck && bun run build
 
 ```sh
 curl --noproxy '*' http://ollama.h100.local/api/tags
+```
+
+## Публикация на gis-master.ru
+
+Remote для публикации:
+
+```sh
+git remote set-url origin https://git.giscloud.ru/trizna/nats-synadia-dev.git
+```
+
+Pipeline устроен по аналогии с `webrtc-komaroff`:
+
+```text
+push to GitLab
+  -> .gitlab-ci.yml
+  -> docker/Dockerfile.build
+  -> build-labels + docker buildx
+  -> builder-registry.builder.giscloud.ru/trizna/nats-synadia-dev/app/main
+  -> stack/Dockerfile.deploy
+  -> dry-stack swarm_deploy
+  -> https://nats-synadia-dev.gis-master.ru
+```
+
+Deployment stack:
+
+- `stack/nats-synadia-dev.drs` - dry-stack описание.
+- `Service :nats` - внутренняя NATS шина demo.
+- `Service :app` - UI + controller + persona agents.
+- `ingress host: 'nats-synadia-dev.*'` - ожидаемый публичный адрес `https://nats-synadia-dev.gis-master.ru`.
+
+После deploy быстрые проверки:
+
+```sh
+curl --noproxy '*' https://nats-synadia-dev.gis-master.ru/healthz
+curl --noproxy '*' -I https://nats-synadia-dev.gis-master.ru/
 ```

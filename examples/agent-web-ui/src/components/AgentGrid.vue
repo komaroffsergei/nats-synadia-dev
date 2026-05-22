@@ -2,22 +2,11 @@
 import { computed } from "vue";
 import AgentGroup from "./AgentGroup.vue";
 import MultiSelectBar from "./MultiSelectBar.vue";
-import VirtualSessionsSection from "./VirtualSessionsSection.vue";
 import { agentsState, agentSections } from "../stores/agents.ts";
 import { selectionState } from "../stores/selection.ts";
-import { virtualSessionsList } from "../stores/virtualSessions.ts";
 
-// Левая колонка приложения:
-// - сверху живые agents из NATS discovery;
-// - рядом UI-only virtual sessions, если пользователь создал групповую беседу;
-// - снизу плавающая MultiSelectBar, когда есть отмеченные галочки.
 const groups = computed(() => agentSections.value);
-// Empty state показываем только когда нет ни реальных agents, ни virtual sessions.
-// Если пользователь уже создал virtual session, но discovery временно пустой,
-// UI всё равно должен оставить рабочую область и историю группы.
-const isEmpty = computed(
-  () => groups.value.length === 0 && virtualSessionsList.value.length === 0,
-);
+const isEmpty = computed(() => groups.value.length === 0);
 const hasSelection = computed(() => selectionState.ids.size > 0);
 </script>
 
@@ -25,9 +14,9 @@ const hasSelection = computed(() => selectionState.ids.size > 0);
   <main class="grid-pane">
     <header class="grid-head">
       <div>
-        <h1 class="grid-title">Synadia Agent Network</h1>
+        <h1 class="grid-title">Synadia NATS Agents</h1>
         <p class="grid-sub">
-          Живой список agents из NATS. Открой карточку для чата или отметь несколько галочками для общего prompt.
+          BASIC persona agents, controller и созданные controller-ом group sessions.
         </p>
       </div>
     </header>
@@ -38,15 +27,9 @@ const hasSelection = computed(() => selectionState.ids.size > 0);
         <h2>Agents не найдены</h2>
         <p>
           Запусти <code class="mono">npm run controller</code>, затем нажми Refresh.
-          Должны появиться controller и persona agents: teacher, engineer, skeptic, manager.
         </p>
       </div>
       <div v-else class="groups">
-        <!-- VirtualSessionsSection не приходит из NATS.
-             Это локальные UI-чаты, которые агрегируют несколько real agents. -->
-        <VirtualSessionsSection />
-        <!-- agentSections уже разделил список на promptable agents и controllers.
-             Здесь компонент просто рисует готовые секции. -->
         <AgentGroup
           v-for="g in groups"
           :key="g.id"
@@ -119,9 +102,6 @@ const hasSelection = computed(() => selectionState.ids.size > 0);
   padding: 0;
 }
 
-    /* Панель группового prompt выезжает снизу только transform-анимацией.
-       Так список не прыгает лишний раз: layout просто освобождает место,
-       а сама панель плавно занимает уже появившуюся область. */
 .bar-enter-active,
 .bar-leave-active {
   transition: transform 0.22s ease, opacity 0.18s ease;

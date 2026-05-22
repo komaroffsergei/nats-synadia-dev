@@ -1,0 +1,11 @@
+FROM ruby:3.4-alpine AS base
+
+RUN apk add --no-cache bash docker-cli-buildx git
+RUN gem install build-labels:0.0.76 dry-stack:0.1.53
+
+WORKDIR /build
+COPY . .
+
+RUN chmod +x /build/docker/build-images.sh
+
+CMD ["bash", "/build/docker/build-images.sh"]

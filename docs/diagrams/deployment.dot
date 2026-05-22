@@ -1,0 +1,50 @@
+digraph G {
+  graph [
+    rankdir=LR,
+    bgcolor="white",
+    pad="0.4",
+    nodesep="0.6",
+    ranksep="0.8",
+    fontname="Arial",
+    label="Публикация на gis-master.ru",
+    labelloc="t",
+    fontsize=22
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Arial",
+    fontsize=12,
+    color="#334155",
+    fillcolor="#f8fafc"
+  ];
+
+  edge [
+    fontname="Arial",
+    fontsize=11,
+    color="#475569",
+    arrowsize=0.8
+  ];
+
+  repo [label="GitLab repo\ntrizna/nats-synadia-dev", fillcolor="#dbeafe"];
+  build [label="CI build push\nbuild-labels + Docker buildx", fillcolor="#e0f2fe"];
+  registry [label="builder-registry\ntrizna/nats-synadia-dev/app/main", fillcolor="#ecfeff"];
+  deploy [label="CI deploy\ndry-stack swarm_deploy", fillcolor="#f3e8ff"];
+  swarm [label="Docker Swarm\ngis-master.ru", fillcolor="#dcfce7"];
+  nats [label="Service: nats\nnats:2.11.6-scratch", fillcolor="#dcfce7"];
+  app [label="Service: app\nUI + controller + personas", fillcolor="#fae8ff"];
+  traefik [label="Traefik ingress\nnats-synadia-dev.gis-master.ru", fillcolor="#fee2e2"];
+  user [label="Browser\nhttps://nats-synadia-dev.gis-master.ru", fillcolor="#dbeafe"];
+
+  repo -> build [label="push to master"];
+  build -> registry [label="push image"];
+  repo -> deploy [label="stack/*.drs"];
+  deploy -> swarm [label="ssh://gis-master.ru"];
+  registry -> app [label="pull image"];
+  swarm -> nats [label="internal NATS"];
+  swarm -> app [label="run app"];
+  app -> nats [label="NATS_URL"];
+  traefik -> app [label="port 3300"];
+  user -> traefik [label="HTTPS"];
+}

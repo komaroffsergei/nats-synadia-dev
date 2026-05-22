@@ -8,6 +8,7 @@
 //                           [--servers nats://...] [--dev]
 
 export type ServerConfig = {
+  host: string;
   port: number;
   context?: string;
   servers?: string;
@@ -29,6 +30,7 @@ export function parseConfig(argv: string[]): ServerConfig {
   };
   const hasFlag = (name: string): boolean => args.includes(name);
 
+  const host = pickFlag("--host") ?? process.env["HOST"] ?? "0.0.0.0";
   const portRaw = pickFlag("--port") ?? process.env["PORT"];
   const port = portRaw ? Number.parseInt(portRaw, 10) : 3300;
   if (!Number.isFinite(port) || port <= 0 || port > 65535) {
@@ -48,5 +50,5 @@ export function parseConfig(argv: string[]): ServerConfig {
     ? undefined
     : (contextFlag ?? contextEnv ?? "current");
 
-  return { port, context, servers, dev };
+  return { host, port, context, servers, dev };
 }

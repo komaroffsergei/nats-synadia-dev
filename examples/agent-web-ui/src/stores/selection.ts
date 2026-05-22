@@ -10,7 +10,7 @@ import { agentsState } from "./agents.ts";
  * Здесь только Set<instanceId> карточек, которые пользователь отметил.
  * Дальше MultiSelectBar берёт этот Set и решает:
  * - либо отправить prompt каждому выбранному agent отдельно;
- * - либо создать UI-only virtual session и вести общий transcript группы.
+ * - либо попросить basic controller создать настоящую group session.
  *
  * Orthogonal to `agentsState.selectedInstanceId` (which drives the right
  * panel — what's "open in chat"). The two interactions don't share state,
@@ -43,7 +43,7 @@ export function toggleSelection(instanceId: string): void {
 }
 
 export function clearSelection(): void {
-  // Сброс режима выбора: кнопка ×, Esc, либо создание virtual session.
+  // Сброс режима выбора: кнопка ×, Esc, либо создание group session.
   selectionState.ids.clear();
 }
 

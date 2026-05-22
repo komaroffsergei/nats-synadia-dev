@@ -40,7 +40,7 @@ import {
 // 3. Dynamic group session agents:
 //    group-1 / group-2 / ...
 //    Их создаёт controller во время работы через endpoint group.create.
-//    Это уже настоящие NATS agents, не browser-only virtual sessions:
+//    Это настоящие NATS agents:
 //    они появляются в discovery, имеют свой prompt subject и хранят общий
 //    контекст выбранной группы внутри controller process.
 //
@@ -51,8 +51,7 @@ import {
 // Этот файл намеренно ближе к Synadia Agent Protocol:
 // - каждый "человек" из src/personas.js становится отдельным promptable agent;
 // - controller остаётся отдельным agent-ом и может создавать group sessions;
-// - browser-only virtual session оставлен как fallback для чужих agents,
-//   но basic persona group создаётся через controller как реальный NATS agent.
+// - basic persona group создаётся через controller как реальный NATS agent.
 //
 // Главное учебное отличие от прошлой версии:
 // раньше controller на каждый prompt создавал временный session-agent;

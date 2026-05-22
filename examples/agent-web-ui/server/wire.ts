@@ -1,13 +1,14 @@
-// Shared WebSocket message types — the contract between the Bun server (which
-// owns the @synadia-ai/agents SDK client) and the browser UI.
+// Shared WebSocket message types between the Bun bridge and browser UI.
 //
-// All messages are JSON text. Binary attachments are carried as base64 strings
-// so the wire stays a single JSON stream in both directions.
+// This project intentionally keeps only the current demo surface:
+// - discovery of NATS agents;
+// - prompt/cancel/query streaming;
+// - basic controller-managed group sessions.
 //
-// Keep this file free of runtime imports so it can be re-exported from the
-// browser bundle (see `src/wire.ts`).
+// Upstream-only control messages that are not part of this educational demo
+// were removed so the wire contract matches this project.
 
-/** Fields the UI needs from a DiscoveredAgent; serializable subset. */
+/** Fields the UI needs from a discovered Synadia Agent. */
 export type DiscoveredAgentDTO = {
   instanceId: string;
   agent: string;
@@ -26,100 +27,10 @@ export type DiscoveredAgentDTO = {
   };
 };
 
-/** Inline attachment in either direction, RFC 4648 §4 base64. */
+/** Inline attachment in either direction, RFC 4648 base64. */
 export type WireAttachment = {
   filename: string;
   base64: string;
-};
-
-/** Summary of a pi-headless session as returned by the controller's `list` endpoint. */
-export type PiExecSessionSummary = {
-  session_id: string;
-  subject: string;
-  heartbeat_subject: string;
-  cwd: string;
-  model?: string;
-  thinking_level?: string;
-  max_lifetime_s: number;
-  remaining_lifetime_s: number;
-  active_request: boolean;
-  queued_requests: number;
-  created_at: string;
-  last_activity: string;
-};
-
-/** Spec for spawning a pi-headless session; mirrors the `spawn` wire. */
-export type PiExecSpawnSpec = {
-  cwd: string;
-  session_id?: string;
-  model?: string;
-  thinking_level?: string;
-  max_lifetime_s?: number;
-};
-
-/** Descriptor returned by a successful `spawn`. */
-export type PiExecSpawnDescriptor = {
-  session_id: string;
-  subject: string;
-  heartbeat_subject: string;
-  cwd: string;
-  model?: string;
-  thinking_level?: string;
-  max_lifetime_s: number;
-  created_at: string;
-  instance_id: string;
-};
-
-/** Summary of a claude-code-headless session as returned by the controller's `list` endpoint. */
-export type CcExecSessionSummary = {
-  session_id: string;
-  subject: string;
-  heartbeat_subject: string;
-  cwd: string;
-  model: string;
-  allowed_tools: string[];
-  permission_mode: string;
-  max_turns: number;
-  max_lifetime_s: number;
-  remaining_lifetime_s: number;
-  active_request: boolean;
-  queued_requests: number;
-  created_at: string;
-  last_activity: string;
-  /** SDK session id, populated after the first turn finishes (used for resume). */
-  sdk_session_id?: string;
-  /** Cumulative USD cost across all completed turns. */
-  total_cost_usd: number;
-  /** Number of completed turns. */
-  turn_count: number;
-};
-
-/** Spec for spawning a claude-code-headless session; mirrors the `spawn` wire. */
-export type CcExecSpawnSpec = {
-  cwd: string;
-  session_id?: string;
-  model?: string;
-  allowed_tools?: string[];
-  permission_mode?: string;
-  max_turns?: number;
-  max_lifetime_s?: number;
-};
-
-/** Descriptor returned by a successful claude-code-headless `spawn`. */
-export type CcExecSpawnDescriptor = {
-  session_id: string;
-  subject: string;
-  heartbeat_subject: string;
-  cwd: string;
-  model: string;
-  allowed_tools: string[];
-  permission_mode: string;
-  max_turns: number;
-  max_lifetime_s: number;
-  created_at: string;
-  instance_id: string;
-  total_cost_usd: number;
-  turn_count: number;
 };
 
 /** Spec for controller-managed basic group sessions. */
@@ -145,8 +56,7 @@ export type BasicGroupSessionDescriptor = {
   instance_id: string;
 };
 
-// ─── Client → Server ─────────────────────────────────────────────────────────
-
+// Client -> Server.
 export type ClientMessage =
   | { kind: "discover" }
   | {
@@ -158,40 +68,6 @@ export type ClientMessage =
     }
   | { kind: "cancel"; id: string }
   | { kind: "query-reply"; id: string; queryId: string; answer: string }
-  | {
-      kind: "piexec-spawn";
-      id: string;
-      controllerInstanceId: string;
-      spec: PiExecSpawnSpec;
-    }
-  | {
-      kind: "piexec-stop";
-      id: string;
-      controllerInstanceId: string;
-      sessionId: string;
-    }
-  | {
-      kind: "piexec-list";
-      id: string;
-      controllerInstanceId: string;
-    }
-  | {
-      kind: "ccexec-spawn";
-      id: string;
-      controllerInstanceId: string;
-      spec: CcExecSpawnSpec;
-    }
-  | {
-      kind: "ccexec-stop";
-      id: string;
-      controllerInstanceId: string;
-      sessionId: string;
-    }
-  | {
-      kind: "ccexec-list";
-      id: string;
-      controllerInstanceId: string;
-    }
   | {
       kind: "basic-group-create";
       id: string;
@@ -210,14 +86,11 @@ export type ClientMessage =
       controllerInstanceId: string;
     };
 
-// ─── Server → Client ─────────────────────────────────────────────────────────
-
+// Server -> Client.
 export type ServerMessage =
   | {
       kind: "ready";
       sdkProtocolVersion: string;
-      natsDescription?: string;
-      /** Live NATS server endpoint (host:port) reported by `nc.getServer()`. */
       natsServer?: string;
     }
   | { kind: "agents"; agents: DiscoveredAgentDTO[] }
@@ -236,7 +109,6 @@ export type ServerMessage =
       attachments?: WireAttachment[];
     }
   | {
-      /** A tool call started (Claude Code etc.). The same toolUseId will appear in a later tool-result. */
       kind: "tool-use";
       id: string;
       toolUseId: string;
@@ -244,7 +116,6 @@ export type ServerMessage =
       input: Record<string, unknown>;
     }
   | {
-      /** A previously-emitted tool call's result. */
       kind: "tool-result";
       id: string;
       toolUseId: string;
@@ -252,7 +123,6 @@ export type ServerMessage =
       isError: boolean;
     }
   | {
-      /** Per-turn + cumulative cost, emitted when a turn completes. */
       kind: "cost";
       id: string;
       turnCostUsd: number;
@@ -262,9 +132,7 @@ export type ServerMessage =
   | {
       kind: "heartbeat";
       instanceId: string;
-      /** Heartbeat payload timestamp (ISO string, from the agent). */
       ts: string;
-      /** Heartbeat interval advertised by the agent. */
       intervalS: number;
     }
   | {
@@ -276,46 +144,12 @@ export type ServerMessage =
       details?: Record<string, unknown>;
     }
   | {
-      kind: "piexec-spawned";
-      id: string;
-      descriptor: PiExecSpawnDescriptor;
-    }
-  | {
-      kind: "piexec-stopped";
-      id: string;
-      sessionId: string;
-    }
-  | {
-      kind: "piexec-listed";
-      id: string;
-      controllerInstanceId: string;
-      sessions: PiExecSessionSummary[];
-    }
-  | {
-      /** Pushed when an agent appears that wasn't in the last discovery snapshot. */
       kind: "agent-added";
       agent: DiscoveredAgentDTO;
     }
   | {
-      /** Pushed when an agent is removed (e.g. stopped via pi-headless or claude-code-headless). */
       kind: "agent-removed";
       instanceId: string;
-    }
-  | {
-      kind: "ccexec-spawned";
-      id: string;
-      descriptor: CcExecSpawnDescriptor;
-    }
-  | {
-      kind: "ccexec-stopped";
-      id: string;
-      sessionId: string;
-    }
-  | {
-      kind: "ccexec-listed";
-      id: string;
-      controllerInstanceId: string;
-      sessions: CcExecSessionSummary[];
     }
   | {
       kind: "basic-group-created";

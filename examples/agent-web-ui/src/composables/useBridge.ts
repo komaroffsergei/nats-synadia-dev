@@ -1,6 +1,7 @@
-// Thin WebSocket client for the Bun server. Module-scoped singleton so every
-// component that calls `useBridge()` shares the same connection, stream map,
-// and reactive state.
+// Thin browser WebSocket client for the Bun bridge.
+//
+// All Vue components share this module-scoped singleton: one socket, one
+// stream handler map, one pending control-request map.
 
 import { bridgeState } from "../stores/bridge.ts";
 import { addAgent, removeAgent, setAgents } from "../stores/agents.ts";
@@ -9,14 +10,8 @@ import { randomUUID } from "../uuid.ts";
 import type {
   BasicGroupCreateSpec,
   BasicGroupSessionDescriptor,
-  CcExecSessionSummary,
-  CcExecSpawnDescriptor,
-  CcExecSpawnSpec,
   ClientMessage,
   DiscoveredAgentDTO,
-  PiExecSessionSummary,
-  PiExecSpawnDescriptor,
-  PiExecSpawnSpec,
   ServerMessage,
   WireAttachment,
 } from "../wire.ts";
@@ -25,35 +20,25 @@ export type StreamHandlers = {
   onResponse?: (text: string, attachments?: WireAttachment[]) => void;
   onStatus?: (status: string) => void;
   onQuery?: (queryId: string, prompt: string, attachments?: WireAttachment[]) => void;
-  /** Claude Code surfaces tool calls (Bash, Read, Edit, etc.) — agent emitted a tool_use. */
   onToolUse?: (toolUseId: string, toolName: string, input: Record<string, unknown>) => void;
-  /** Result of a previously-emitted tool_use, paired by toolUseId. */
   onToolResult?: (toolUseId: string, output: string, isError: boolean) => void;
-  /** Per-turn cost notification, fires when each turn completes. */
   onCost?: (turnCostUsd: number, totalCostUsd: number) => void;
   onDone?: () => void;
   onError?: (message: string, code?: string | number, details?: Record<string, unknown>) => void;
 };
 
-let ws: WebSocket | null = null;
-let reconnectAttempt = 0;
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-const streams = new Map<string, StreamHandlers>();
-let pendingDiscover:
-  | { resolve: (a: DiscoveredAgentDTO[]) => void; reject: (e: Error) => void }
-  | null = null;
-
 type PendingControl = {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
 };
-const pendingControl = new Map<string, PendingControl>();
 
-function rejectPendingControls(err: Error): void {
-  for (const p of pendingControl.values()) p.reject(err);
-  pendingControl.clear();
-}
+let ws: WebSocket | null = null;
+let reconnectAttempt = 0;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingDiscover: { resolve: (a: DiscoveredAgentDTO[]) => void; reject: (e: Error) => void } | null = null;
+
+const streams = new Map<string, StreamHandlers>();
+const pendingControl = new Map<string, PendingControl>();
 
 function connect(): void {
   if (ws) return;
@@ -89,10 +74,9 @@ function connect(): void {
       pendingDiscover.reject(new Error("connection closed"));
       pendingDiscover = null;
     }
-    rejectPendingControls(new Error("connection closed"));
-    for (const s of streams.values()) {
-      s.onError?.("connection closed");
-    }
+    for (const p of pendingControl.values()) p.reject(new Error("connection closed"));
+    pendingControl.clear();
+    for (const s of streams.values()) s.onError?.("connection closed");
     streams.clear();
 
     scheduleReconnect();
@@ -156,79 +140,16 @@ function handleServerMessage(msg: ServerMessage): void {
     case "agent-removed":
       removeAgent(msg.instanceId);
       break;
-    case "piexec-spawned": {
-      const entry = pendingControl.get(msg.id);
-      if (entry) {
-        pendingControl.delete(msg.id);
-        entry.resolve(msg.descriptor);
-      }
+    case "basic-group-created":
+      resolveControl(msg.id, msg.descriptor);
       break;
-    }
-    case "piexec-stopped": {
-      const entry = pendingControl.get(msg.id);
-      if (entry) {
-        pendingControl.delete(msg.id);
-        entry.resolve(msg.sessionId);
-      }
+    case "basic-group-stopped":
+      resolveControl(msg.id, msg.sessionId);
       break;
-    }
-    case "piexec-listed": {
-      const entry = pendingControl.get(msg.id);
-      if (entry) {
-        pendingControl.delete(msg.id);
-        entry.resolve(msg.sessions);
-      }
+    case "basic-group-listed":
+      resolveControl(msg.id, msg.groups);
       break;
-    }
-    case "ccexec-spawned": {
-      const entry = pendingControl.get(msg.id);
-      if (entry) {
-        pendingControl.delete(msg.id);
-        entry.resolve(msg.descriptor);
-      }
-      break;
-    }
-    case "ccexec-stopped": {
-      const entry = pendingControl.get(msg.id);
-      if (entry) {
-        pendingControl.delete(msg.id);
-        entry.resolve(msg.sessionId);
-      }
-      break;
-    }
-    case "ccexec-listed": {
-      const entry = pendingControl.get(msg.id);
-      if (entry) {
-        pendingControl.delete(msg.id);
-        entry.resolve(msg.sessions);
-      }
-      break;
-    }
-    case "basic-group-created": {
-      const entry = pendingControl.get(msg.id);
-      if (entry) {
-        pendingControl.delete(msg.id);
-        entry.resolve(msg.descriptor);
-      }
-      break;
-    }
-    case "basic-group-stopped": {
-      const entry = pendingControl.get(msg.id);
-      if (entry) {
-        pendingControl.delete(msg.id);
-        entry.resolve(msg.sessionId);
-      }
-      break;
-    }
-    case "basic-group-listed": {
-      const entry = pendingControl.get(msg.id);
-      if (entry) {
-        pendingControl.delete(msg.id);
-        entry.resolve(msg.groups);
-      }
-      break;
-    }
-    case "error": {
+    case "error":
       if (msg.id && streams.has(msg.id)) {
         streams.get(msg.id)!.onError?.(msg.message, msg.code, msg.details);
       } else if (msg.id && pendingControl.has(msg.id)) {
@@ -242,8 +163,14 @@ function handleServerMessage(msg: ServerMessage): void {
         bridgeState.lastError = msg.message;
       }
       break;
-    }
   }
+}
+
+function resolveControl(id: string, value: unknown): void {
+  const entry = pendingControl.get(id);
+  if (!entry) return;
+  pendingControl.delete(id);
+  entry.resolve(value);
 }
 
 function send(msg: ClientMessage): boolean {
@@ -254,9 +181,7 @@ function send(msg: ClientMessage): boolean {
 
 function discover(): Promise<DiscoveredAgentDTO[]> {
   return new Promise((resolve, reject) => {
-    if (pendingDiscover) {
-      pendingDiscover.reject(new Error("superseded by another discover() call"));
-    }
+    if (pendingDiscover) pendingDiscover.reject(new Error("superseded by another discover() call"));
     pendingDiscover = { resolve, reject };
     if (!send({ kind: "discover" })) {
       pendingDiscover = null;
@@ -292,82 +217,11 @@ function queryReply(id: string, queryId: string, answer: string): void {
 
 function controlRequest<T>(msg: ClientMessage & { id: string }): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    pendingControl.set(msg.id, {
-      resolve: resolve as (value: unknown) => void,
-      reject,
-    });
+    pendingControl.set(msg.id, { resolve: resolve as (value: unknown) => void, reject });
     if (!send(msg)) {
       pendingControl.delete(msg.id);
       reject(new Error("WebSocket not open"));
     }
-  });
-}
-
-function piexecSpawn(
-  controllerInstanceId: string,
-  spec: PiExecSpawnSpec,
-): Promise<PiExecSpawnDescriptor> {
-  const id = randomUUID();
-  return controlRequest<PiExecSpawnDescriptor>({
-    kind: "piexec-spawn",
-    id,
-    controllerInstanceId,
-    spec,
-  });
-}
-
-function piexecStop(controllerInstanceId: string, sessionId: string): Promise<string> {
-  const id = randomUUID();
-  return controlRequest<string>({
-    kind: "piexec-stop",
-    id,
-    controllerInstanceId,
-    sessionId,
-  });
-}
-
-function piexecList(
-  controllerInstanceId: string,
-): Promise<PiExecSessionSummary[]> {
-  const id = randomUUID();
-  return controlRequest<PiExecSessionSummary[]>({
-    kind: "piexec-list",
-    id,
-    controllerInstanceId,
-  });
-}
-
-function ccexecSpawn(
-  controllerInstanceId: string,
-  spec: CcExecSpawnSpec,
-): Promise<CcExecSpawnDescriptor> {
-  const id = randomUUID();
-  return controlRequest<CcExecSpawnDescriptor>({
-    kind: "ccexec-spawn",
-    id,
-    controllerInstanceId,
-    spec,
-  });
-}
-
-function ccexecStop(controllerInstanceId: string, sessionId: string): Promise<string> {
-  const id = randomUUID();
-  return controlRequest<string>({
-    kind: "ccexec-stop",
-    id,
-    controllerInstanceId,
-    sessionId,
-  });
-}
-
-function ccexecList(
-  controllerInstanceId: string,
-): Promise<CcExecSessionSummary[]> {
-  const id = randomUUID();
-  return controlRequest<CcExecSessionSummary[]>({
-    kind: "ccexec-list",
-    id,
-    controllerInstanceId,
   });
 }
 
@@ -394,9 +248,7 @@ function basicGroupStop(controllerInstanceId: string, sessionId: string): Promis
   });
 }
 
-function basicGroupList(
-  controllerInstanceId: string,
-): Promise<BasicGroupSessionDescriptor[]> {
+function basicGroupList(controllerInstanceId: string): Promise<BasicGroupSessionDescriptor[]> {
   const id = randomUUID();
   return controlRequest<BasicGroupSessionDescriptor[]>({
     kind: "basic-group-list",
@@ -413,23 +265,15 @@ export function useBridge() {
     prompt,
     cancel,
     queryReply,
-    piexecSpawn,
-    piexecStop,
-    piexecList,
-    ccexecSpawn,
-    ccexecStop,
-    ccexecList,
     basicGroupCreate,
     basicGroupStop,
     basicGroupList,
   };
 }
 
-/** Encode a File to a wire attachment (RFC 4648 §4 base64). */
+/** Encode a File to a wire attachment. */
 export async function fileToAttachment(file: File): Promise<WireAttachment> {
   const bytes = new Uint8Array(await file.arrayBuffer());
-  // Chunked binary-string assembly avoids the argument-length cap on
-  // String.fromCharCode(...array) for larger files.
   let binary = "";
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) {

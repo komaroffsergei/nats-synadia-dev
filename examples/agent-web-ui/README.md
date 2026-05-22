@@ -53,14 +53,16 @@ bun run server/index.ts --context current --dev
 
 ## Групповой prompt
 
-Галочки на карточках не создают отдельный backend group endpoint.
+Галочки на карточках создают controller-managed group session для `basic`
+persona agents.
 
 ```text
 selected agents
-  -> virtual session в браузере
-  -> N отдельных bridge.prompt(instanceId, prompt)
-  -> N независимых NATS prompt streams
-  -> общий transcript справа
+  -> basic-group-create через Bun bridge
+  -> agents.group.create.basic.demo.control
+  -> новый discoverable NATS agent group-N
+  -> prompt уже в group-N
+  -> controller собирает ответы persona agents и хранит общий context
 ```
 
 Это ровно тот механизм, который нужен для учебного сценария:
