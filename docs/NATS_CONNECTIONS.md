@@ -36,6 +36,25 @@ NATS_SERVICE_URL
 
 Приоритет: `NATS_URL` -> `NATS_SERVERS` -> `NATS_SERVICE_URL` -> default.
 
+UI bridge также поддерживает несколько независимых NATS connections:
+
+```text
+NATS_CONNECTIONS=demo=nats://nats-synadia-dev_nats:4222;weather=nats://<user>:<password>@rag-stack_inference_nats:4222
+```
+
+Это отдельный режим от server-list через запятую. Запятая внутри NATS URL
+означает cluster/failover для одного client-а, а `NATS_CONNECTIONS` через `;`
+открывает несколько client-ов к разным NATS-шинам.
+
+Поведение:
+
+- discovery собирается со всех connections;
+- `instanceId` в UI получает prefix connection-а, чтобы одинаковые instance ids
+  из разных NATS не конфликтовали;
+- prompt/status/group endpoints вызываются через тот NATS client, где найден
+  agent;
+- `NATS_URL` остаётся primary bus для встроенных `basic.demo.*` agents.
+
 Если нужный NATS не находится в default network текущего stack-а, app container
 можно подключить к уже существующей docker network:
 

@@ -1,7 +1,7 @@
 // synadia-nats-agents web UI — Bun server entry point.
 //
-// Этот процесс держит один @synadia-ai/agents Client (одно NATS connection
-// на весь UI server) и обслуживает:
+// Этот процесс держит один или несколько @synadia-ai/agents Client-ов
+// (по одному на каждую независимую NATS-шину) и обслуживает:
 //   - GET /ws     → WebSocket; each connection gets a fresh Bridge.
 //   - everything else → static files from ./dist/ (SPA fallback to index.html).
 //
@@ -21,32 +21,36 @@ import {
   connect as natsConnect,
   type NodeConnectionOptions,
 } from "@nats-io/transport-node";
-import { parseConfig } from "./config.ts";
-import { Bridge, formatSdkProtocolVersion, type BridgeWsData } from "./bridge.ts";
+import { parseConfig, type NatsConnectionConfig } from "./config.ts";
+import { Bridge, formatSdkProtocolVersion, type BridgeConnection, type BridgeWsData } from "./bridge.ts";
 
 const config = parseConfig(Bun.argv);
 
-async function buildConnectOptions(): Promise<NodeConnectionOptions> {
-  if (config.servers) {
+async function buildConnectOptions(connection: NatsConnectionConfig): Promise<NodeConnectionOptions> {
+  if (connection.servers) {
     // `parseNatsUrl` extracts userinfo (token / user:password) — without it
     // a URL like `nats://TOKEN@host:port` would silently drop the token
     // because `@nats-io/transport-node` doesn't parse credentials from URLs.
     // `name` is spread last so the local connection identity wins even if
     // a future `parseNatsUrl` were to start emitting a `name` field.
-    return { ...parseNatsUrl(config.servers), name: "testui" };
+    return { ...parseNatsUrl(connection.servers), name: `testui-${connection.id}` };
   }
-  const contextName = config.context ?? "current";
-  return { ...(await loadContextOptions(contextName)), name: "testui" };
+  const contextName = connection.context ?? "current";
+  return { ...(await loadContextOptions(contextName)), name: `testui-${connection.id}` };
 }
 
-const connectOpts = await buildConnectOptions();
-const nc: NatsConnection = await natsConnect(connectOpts);
-const agents = new Agents({ nc });
+async function openBridgeConnection(connection: NatsConnectionConfig): Promise<BridgeConnection> {
+  const connectOpts = await buildConnectOptions(connection);
+  const nc: NatsConnection = await natsConnect(connectOpts);
+  const agents = new Agents({ nc });
+  const serverInfoNote = connection.servers
+    ? `servers=${redactNatsUrl(connection.servers)}`
+    : `context=${connection.context ?? "current"}`;
+  console.log(`[testui] NATS client connected label=${connection.label} (${serverInfoNote})`);
+  return { ...connection, nc, agents };
+}
 
-const serverInfoNote = config.servers
-  ? `servers=${redactNatsUrl(config.servers)}`
-  : `context=${config.context ?? "current"}`;
-console.log(`[testui] NATS client connected (${serverInfoNote})`);
+const natsConnections = await Promise.all(config.connections.map(openBridgeConnection));
 
 const distDir = join(import.meta.dir, "..", "dist");
 const sdkVersionString = formatSdkProtocolVersion(SDK_PROTOCOL_VERSION);
@@ -67,15 +71,23 @@ const server = Bun.serve<BridgeWsData>({
       return Response.json({
         ok: true,
         service: "synadia-nats-agents-web-ui",
-        nats: config.servers
-          ? { mode: "servers", value: redactNatsUrl(config.servers) }
-          : { mode: "context", value: config.context ?? "current" },
+        nats: {
+          mode: natsConnections.length > 1 ? "multi" : (natsConnections[0]?.servers ? "servers" : "context"),
+          connections: natsConnections.map((connection) => ({
+            id: connection.id,
+            label: connection.label,
+            value: connection.servers
+              ? redactNatsUrl(connection.servers)
+              : `context:${connection.context ?? "current"}`,
+            server: connection.nc.getServer() || null,
+          })),
+        },
         sdkProtocolVersion: sdkVersionString,
       });
     }
 
     if (url.pathname === "/ws") {
-      const bridge = new Bridge(agents, nc, sdkVersionString);
+      const bridge = new Bridge(natsConnections, sdkVersionString);
       const upgraded = srv.upgrade(req, { data: { bridge } });
       if (upgraded) return undefined;
       return new Response("expected WebSocket upgrade on /ws", { status: 400 });
@@ -138,15 +150,17 @@ async function shutdown(sig: NodeJS.Signals): Promise<void> {
   } catch {
     /* noop */
   }
-  try {
-    await agents.close();
-  } catch (e) {
-    console.warn("[testui] agents.close() failed:", (e as Error).message);
-  }
-  try {
-    await nc.close();
-  } catch {
-    /* noop */
+  for (const connection of natsConnections) {
+    try {
+      await connection.agents.close();
+    } catch (e) {
+      console.warn(`[testui] agents.close() failed for ${connection.label}:`, (e as Error).message);
+    }
+    try {
+      await connection.nc.close();
+    } catch {
+      /* noop */
+    }
   }
   process.exit(0);
 }

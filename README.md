@@ -160,6 +160,8 @@ NATS_URL=nats://127.0.0.1:4222
 # Можно использовать alias-ы для внешнего NATS:
 # NATS_SERVERS=nats://host:4222
 # NATS_SERVICE_URL=nats://host:4222
+# Несколько независимых NATS-шин для UI:
+# NATS_CONNECTIONS=demo=nats://127.0.0.1:4222;weather=nats://host:4222
 # Для deploy: подключить app container к существующей docker network.
 # Например, чтобы увидеть внутренний NATS другого stack-а на gis-master:
 # NATS_EXTERNAL_NETWORK=rag-stack_default
@@ -247,6 +249,34 @@ GitLab pipeline variables.
 оставляет только UI bridge. Это удобно, когда нужно аккуратно посмотреть чужую
 NATS-шину, например `agents.prompt.weather.dev.h100`, без регистрации
 дополнительных demo services.
+
+## Несколько NATS подключений
+
+UI умеет подключаться сразу к нескольким независимым NATS-шинам:
+
+```text
+NATS_CONNECTIONS=demo=nats://nats-synadia-dev_nats:4222;weather=nats://<user>:<password>@rag-stack_inference_nats:4222;mytest=nats://host:4222
+```
+
+Как это работает:
+
+- каждая запись `name=url` открывает отдельный NATS client;
+- discovery объединяет agents из всех шин в один список;
+- карточка agent-а получает badge с именем connection: `demo`, `weather`, `mytest`;
+- prompt уходит обратно в ту же NATS-шину, где agent был найден;
+- `NATS_URL` остаётся primary bus для встроенных `basic.demo.*` agents/controller.
+
+Важно: `NATS_CONNECTIONS` разделяется `;`. Запятая внутри `NATS_URL` остаётся
+обычным NATS server-list/failover внутри одной шины, а не несколькими шинами.
+
+Для текущей production demo можно включить и наши учебные agents, и weather:
+
+```text
+NATS_URL=nats://nats-synadia-dev_nats:4222
+NATS_EXTERNAL_NETWORK=rag-stack_default
+NATS_CONNECTIONS=demo=nats://nats-synadia-dev_nats:4222;weather=nats://<user>:<password>@rag-stack_inference_nats:4222
+START_BASIC_AGENTS=true
+```
 
 ## Weather Adapter
 

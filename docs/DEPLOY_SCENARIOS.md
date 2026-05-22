@@ -27,6 +27,20 @@ START_BASIC_AGENTS=false
   потому что `START_BASIC_AGENTS=false`.
 - `/healthz` покажет, к какому NATS подключён UI, с замазанными credentials.
 
+Если нужно одновременно показать внешний weather agent и локальных учебных
+agents/controller, используется multi-NATS режим:
+
+```text
+NATS_URL=nats://nats-synadia-dev_nats:4222
+NATS_EXTERNAL_NETWORK=rag-stack_default
+NATS_CONNECTIONS=demo=nats://nats-synadia-dev_nats:4222;weather=nats://<user>:<password>@rag-stack_inference_nats:4222
+START_BASIC_AGENTS=true
+```
+
+В этом режиме `basic.demo.*` регистрируются в local demo NATS, а `weather`
+читается из `rag-stack_inference_nats`. UI показывает их вместе, но каждый
+prompt маршрутизируется обратно в свою шину.
+
 Weather agent ожидает координаты. Для него добавлен adapter: пользователь
 заполняет lat/lon в UI, а bridge отправляет их как top-level fields envelope-а.
 В Ruby реализации эти поля попадают в `Envelope.extra`.
@@ -65,6 +79,22 @@ START_BASIC_AGENTS=false
 - проверку heartbeat/status/prompt endpoints;
 - быструю диагностику "видит ли UI agent-а";
 - минимальное вмешательство в чужую NATS-шину.
+
+### 2.1. Aggregated dashboard поверх нескольких NATS
+
+Параметры:
+
+```text
+NATS_CONNECTIONS=demo=nats://local:4222;weather=nats://external:4222;mytest=nats://test:4222
+```
+
+Что получаем:
+
+- один UI показывает agents из нескольких независимых NATS;
+- можно демонстрировать свои тестовые agents рядом с production-like agents;
+- одинаковые raw instance ids не конфликтуют, потому UI instance id получает
+  prefix connection-а;
+- prompt всегда уходит в тот connection, где agent был найден.
 
 ### 3. UI + наши demo agents в общей NATS-шине
 

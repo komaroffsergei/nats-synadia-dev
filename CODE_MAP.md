@@ -37,15 +37,20 @@
 - `examples/agent-web-ui/server/index.ts` - Bun HTTP/WebSocket server.
   Раздаёт `dist/`, держит `/ws`, отдаёт `/healthz` для deploy-smoke.
   NATS можно задать через `--nats-url`, `--servers`, `NATS_URL`, `NATS_SERVERS`, `NATS_SERVICE_URL`.
+  Несколько независимых NATS задаются через `NATS_CONNECTIONS=name=url;name2=url2`.
 
 - `examples/agent-web-ui/server/bridge.ts` - bridge между browser WebSocket и `@synadia-ai/agents`.
-  Делает discovery, prompt streaming, cancel/query reply, а также вызывает group endpoints controller-а.
+  Делает discovery по всем configured NATS connections, prompt streaming,
+  cancel/query reply, а также вызывает group endpoints controller-а через тот
+  NATS client, где найден agent.
   Для weather adapter-а принимает `extra.lat/lon` и вручную собирает NATS
   envelope, потому публичный `Agent.prompt()` SDK принимает только text/attachments.
 
 - `examples/agent-web-ui/server/wire.ts` - wire-contract между browser и Bun bridge.
   Здесь оставлен только текущий demo surface: discovery, prompt streaming,
   prompt `extra` для adapter-ов и `basic-group-*`.
+  `DiscoveredAgentDTO.instanceId` получает prefix connection-а, а raw id хранится
+  в `rawInstanceId`.
 
 - `examples/agent-web-ui/src/stores/agents.ts` - классификация найденных agents.
   `bucketOf()` читает metadata и раскладывает карточки на persona/controller/group/openclaw/other.
@@ -90,12 +95,14 @@
 - `scripts/start-production.js` - один container entrypoint.
   Ждёт NATS TCP, запускает Bun UI server и, если `START_BASIC_AGENTS` не выключен,
   поднимает controller/persona agents рядом.
+  Если задан `NATS_CONNECTIONS`, ждёт TCP доступность всех URL из этого списка.
 
 - `docker/docker-compose.yml` - build-labels target для image `trizna/nats-synadia-dev/app/<branch>`.
 
 - `stack/nats-synadia-dev.drs` - dry-stack deployment:
   `nats` service + публичный `app` service на `nats-synadia-dev.gis-master.ru`.
   `NATS_URL` внутри stack-а можно переопределить env-ами `NATS_URL`/`NATS_SERVERS`/`NATS_SERVICE_URL`.
+  `NATS_CONNECTIONS` пробрасывается в UI для multi-NATS discovery.
   `NATS_EXTERNAL_NETWORK` дополнительно подключает `app` к уже существующей docker network,
   например `rag-stack_default` для NATS из `nats-agent-ruby`.
   `START_BASIC_AGENTS=false` переводит production container в UI-only режим.

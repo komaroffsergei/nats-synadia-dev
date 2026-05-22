@@ -11,6 +11,9 @@
 /** Fields the UI needs from a discovered Synadia Agent. */
 export type DiscoveredAgentDTO = {
   instanceId: string;
+  rawInstanceId: string;
+  connectionId: string;
+  connectionLabel: string;
   agent: string;
   owner: string;
   name: string;

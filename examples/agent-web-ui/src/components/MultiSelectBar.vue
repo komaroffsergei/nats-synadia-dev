@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import AttachmentChips from "./AttachmentChips.vue";
-import { agentsState, basicController, selectAgent } from "../stores/agents.ts";
+import { agentsState, basicControllerForConnection, selectAgent } from "../stores/agents.ts";
 import { clearSelection, selectionState } from "../stores/selection.ts";
 import { getSession } from "../stores/chat.ts";
 import { fileToAttachment, useBridge } from "../composables/useBridge.ts";
@@ -33,8 +33,24 @@ const allSelectedBasicPersonas = computed(
     ),
 );
 
+const selectedConnectionId = computed(() => selectedAgents.value[0]?.connectionId ?? null);
+
+const allSelectedSameConnection = computed(
+  () =>
+    selectedAgents.value.length > 0 &&
+    selectedAgents.value.every((agent) => agent.connectionId === selectedConnectionId.value),
+);
+
+const selectedBasicController = computed(() =>
+  selectedConnectionId.value ? basicControllerForConnection(selectedConnectionId.value) : null,
+);
+
 const canCreateControllerGroup = computed(
-  () => createGroup.value && allSelectedBasicPersonas.value && basicController.value !== null,
+  () =>
+    createGroup.value &&
+    allSelectedBasicPersonas.value &&
+    allSelectedSameConnection.value &&
+    selectedBasicController.value !== null,
 );
 
 const busyCount = computed(() => {
@@ -105,13 +121,13 @@ async function send(): Promise<void> {
   let okN = 0;
   let busyN = 0;
 
-  if (canCreateControllerGroup.value && basicController.value) {
+  if (canCreateControllerGroup.value && selectedBasicController.value) {
     try {
       const personas = selectedAgents.value.map((agent) => agent.metadata?.["persona_id"] ?? agent.name);
       const label = `Группа: ${selectedAgents.value
         .map((agent) => agent.metadata?.["persona_name"] ?? agent.name)
         .join(", ")}`;
-      const descriptor = await bridge.basicGroupCreate(basicController.value.instanceId, { personas, label });
+      const descriptor = await bridge.basicGroupCreate(selectedBasicController.value.instanceId, { personas, label });
       const discovered = await bridge.discover();
       const groupAgent = discovered.find((agent) => agent.instanceId === descriptor.instance_id);
       if (!groupAgent) {

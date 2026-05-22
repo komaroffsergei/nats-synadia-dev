@@ -62,6 +62,18 @@ NATS_SERVICE_URL=nats://host:4222 bun run dev
 Если URL содержит token или `user:password`, `/healthz` и server log показывают
 адрес с redaction, без secret material.
 
+## Несколько NATS
+
+Для демонстрации agents из разных независимых NATS-шин:
+
+```bash
+NATS_CONNECTIONS='demo=nats://127.0.0.1:4222;weather=nats://host:4222;mytest=nats://test-host:4222' bun run dev
+```
+
+Каждая запись `name=url` создаёт отдельный NATS client. Discovery объединяется,
+карточки получают badge `name`, а prompt уходит обратно в тот connection, где
+agent был найден.
+
 ## Weather adapter
 
 Для external agent-а `agents.prompt.weather.dev.h100` UI показывает поля

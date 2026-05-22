@@ -31,6 +31,7 @@ const natsUrl =
   process.env.NATS_SERVERS ||
   process.env.NATS_SERVICE_URL ||
   "nats://nats-synadia-dev_nats:4222";
+const natsConnections = process.env.NATS_CONNECTIONS || "";
 const port = process.env.PORT || "3300";
 const startBasicAgents = !["0", "false", "no", "off"].includes(
   String(process.env.START_BASIC_AGENTS || "true").toLowerCase(),
@@ -69,6 +70,28 @@ function firstNatsUrl(urlValue) {
   // проверяет только первый endpoint: этого достаточно, чтобы не стартовать UI
   // до доступности хотя бы одного явно указанного NATS service.
   return String(urlValue).split(",")[0].trim();
+}
+
+function natsUrlsForWait() {
+  const urls = parseNatsConnections(natsConnections);
+  if (startBasicAgents) urls.unshift(natsUrl);
+  return unique(urls.length > 0 ? urls : [natsUrl]);
+}
+
+function unique(values) {
+  return [...new Set(values)];
+}
+
+function parseNatsConnections(raw) {
+  return String(raw)
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const eqAt = entry.indexOf("=");
+      return eqAt >= 0 ? entry.slice(eqAt + 1).trim() : entry;
+    })
+    .filter((value) => value && !value.startsWith("context:"));
 }
 
 async function waitForTcp(urlValue, timeoutMs = 60_000) {
@@ -133,7 +156,7 @@ function stopAll(signal) {
 process.once("SIGINT", () => stopAll("SIGINT"));
 process.once("SIGTERM", () => stopAll("SIGTERM"));
 
-await waitForTcp(natsUrl);
+await Promise.all(natsUrlsForWait().map((url) => waitForTcp(url)));
 
 if (startBasicAgents) {
   start("controller", "node", ["src/basic-controller.js"]);

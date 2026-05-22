@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import AgentStatusDot from "./AgentStatusDot.vue";
 import type { DiscoveredAgentDTO } from "../wire.ts";
-import { basicController, bucketOf, BUCKETS, removeAgent, type Bucket } from "../stores/agents.ts";
+import { basicControllerForConnection, bucketOf, BUCKETS, removeAgent, type Bucket } from "../stores/agents.ts";
 import { clearSession } from "../stores/chat.ts";
 import { selectionState, toggleSelection } from "../stores/selection.ts";
 import { useBridge } from "../composables/useBridge.ts";
@@ -87,7 +87,7 @@ async function onStopGroup(e: Event): Promise<void> {
 
   // UI не знает NATS subject `group.stop` напрямую. Он просит найденный
   // BASIC CONTROL сделать stop, а Bun bridge уже отправляет NATS request.
-  const controller = basicController.value;
+  const controller = basicControllerForConnection(props.agent.connectionId);
   if (!controller) {
     stopError.value = "BASIC CONTROL не найден";
     return;
@@ -181,6 +181,7 @@ async function onStopGroup(e: Event): Promise<void> {
       <h3 class="card-title">{{ subtitle }}</h3>
 
       <div class="meta">
+        <span class="badge connection mono">{{ agent.connectionLabel }}</span>
         <span class="owner mono">@{{ agent.owner }}</span>
         <span v-if="model" class="badge mono">{{ model }}</span>
         <span v-if="targetPersonas" class="badge mono">{{ targetPersonas }}</span>

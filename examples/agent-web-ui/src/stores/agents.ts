@@ -55,6 +55,17 @@ export const basicController = computed<DiscoveredAgentDTO | null>(
     ) ?? null,
 );
 
+export function basicControllerForConnection(connectionId: string): DiscoveredAgentDTO | null {
+  return (
+    agentsState.list.find(
+      (agent) =>
+        agent.connectionId === connectionId &&
+        agent.agent === "basic" &&
+        agent.metadata?.["role"] === "controller",
+    ) ?? null
+  );
+}
+
 export const BUCKETS = {
   BASIC_PERSONA: "basic-persona",
   BASIC_GROUP_SESSION: "basic-group-session",

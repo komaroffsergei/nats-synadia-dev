@@ -34,6 +34,19 @@ import type {
 } from "./wire.ts";
 
 type ActiveStream = { controller: AbortController };
+export type BridgeConnection = {
+  id: string;
+  label: string;
+  context?: string;
+  servers?: string;
+  nc: NatsConnection;
+  agents: Agents;
+};
+type AgentRef = {
+  agent: Agent;
+  connection: BridgeConnection;
+  rawInstanceId: string;
+};
 type NatsStreamMsg = {
   data: Uint8Array;
   headers?: { has?: (key: string) => boolean; get?: (key: string) => string | null };
@@ -51,12 +64,12 @@ export type BridgeWsData = { bridge: Bridge };
 
 export class Bridge {
   private ws: ServerWebSocket<BridgeWsData> | null = null;
-  private agentsByInstanceId = new Map<string, Agent>();
+  private agentsByInstanceId = new Map<string, AgentRef>();
   private activeStreams = new Map<string, ActiveStream>();
   private activeQueries = new Map<string, QueryEvent>();
   private heartbeatSubs = new Map<string, () => void>();
-  private heartbeatTracker: HeartbeatTracker | null = null;
-  private heartbeatWatchUnsub: (() => void) | null = null;
+  private heartbeatTrackers = new Map<string, HeartbeatTracker>();
+  private heartbeatWatchUnsubs = new Map<string, () => void>();
   private pendingInstanceLookups = new Set<string>();
   private lastHeartbeatAt = new Map<string, { atMs: number; intervalS: number }>();
   private staleSweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -67,14 +80,15 @@ export class Bridge {
   private static readonly DEFAULT_HB_INTERVAL_S = 30;
 
   constructor(
-    private readonly agents: Agents,
-    private readonly nc: NatsConnection,
+    private readonly connections: BridgeConnection[],
     private readonly sdkProtocolVersion: string,
   ) {}
 
   open(ws: ServerWebSocket<BridgeWsData>): void {
     this.ws = ws;
-    const natsServer = this.nc.getServer() || undefined;
+    const natsServer = this.connections
+      .map((connection) => `${connection.label}:${connection.nc.getServer() || "unknown"}`)
+      .join(", ");
     this.send({
       kind: "ready",
       sdkProtocolVersion: this.sdkProtocolVersion,
@@ -131,10 +145,10 @@ export class Bridge {
     this.activeQueries.clear();
     for (const unsub of this.heartbeatSubs.values()) unsub();
     this.heartbeatSubs.clear();
-    if (this.heartbeatWatchUnsub) this.heartbeatWatchUnsub();
-    this.heartbeatWatchUnsub = null;
-    if (this.heartbeatTracker) void this.heartbeatTracker.stop();
-    this.heartbeatTracker = null;
+    for (const unsub of this.heartbeatWatchUnsubs.values()) unsub();
+    this.heartbeatWatchUnsubs.clear();
+    for (const tracker of this.heartbeatTrackers.values()) void tracker.stop();
+    this.heartbeatTrackers.clear();
     if (this.staleSweepTimer) clearInterval(this.staleSweepTimer);
     this.staleSweepTimer = null;
     this.lastHeartbeatAt.clear();
@@ -144,39 +158,55 @@ export class Bridge {
 
   private async handleDiscover(): Promise<void> {
     try {
-      let discovered: Agent[];
-      try {
-        discovered = await this.agents.discover();
-      } catch (err) {
-        if (isNoRespondersError(err)) discovered = [];
-        else throw err;
-      }
-
       this.agentsByInstanceId.clear();
       const dto: DiscoveredAgentDTO[] = [];
       const seenIds = new Set<string>();
-      for (const agent of discovered) {
-        this.agentsByInstanceId.set(agent.instanceId, agent);
-        seenIds.add(agent.instanceId);
-        dto.push(toDTO(agent));
+      const errors: string[] = [];
+
+      for (const connection of this.connections) {
+        let discovered: Agent[];
+        try {
+          discovered = await connection.agents.discover();
+        } catch (err) {
+          if (isNoRespondersError(err)) discovered = [];
+          else {
+            errors.push(`${connection.label}: ${(err as Error).message}`);
+            console.warn(`[bridge] discover failed on ${connection.label}:`, (err as Error).message);
+            continue;
+          }
+        }
+
+        for (const agent of discovered) {
+          const instanceId = wireInstanceId(connection, agent.instanceId);
+          this.agentsByInstanceId.set(instanceId, { agent, connection, rawInstanceId: agent.instanceId });
+          seenIds.add(instanceId);
+          dto.push(toDTO(agent, connection, instanceId));
+        }
       }
+
+      if (dto.length === 0 && errors.length === this.connections.length) {
+        throw new Error(errors.join("; "));
+      }
+
       this.send({ kind: "agents", agents: dto });
 
-      for (const id of seenIds) {
-        if (this.heartbeatSubs.has(id)) continue;
-        const unsub = this.agents.onHeartbeat(id, (hb) => {
-          this.lastHeartbeatAt.set(id, {
+      for (const instanceId of seenIds) {
+        if (this.heartbeatSubs.has(instanceId)) continue;
+        const ref = this.agentsByInstanceId.get(instanceId);
+        if (!ref) continue;
+        const unsub = ref.connection.agents.onHeartbeat(ref.rawInstanceId, (hb) => {
+          this.lastHeartbeatAt.set(instanceId, {
             atMs: Date.now(),
             intervalS: hb.intervalS || Bridge.DEFAULT_HB_INTERVAL_S,
           });
-          this.send({ kind: "heartbeat", instanceId: id, ts: hb.ts, intervalS: hb.intervalS });
+          this.send({ kind: "heartbeat", instanceId, ts: hb.ts, intervalS: hb.intervalS });
         });
-        this.heartbeatSubs.set(id, unsub);
+        this.heartbeatSubs.set(instanceId, unsub);
       }
-      for (const [id, unsub] of this.heartbeatSubs) {
-        if (seenIds.has(id)) continue;
+      for (const [instanceId, unsub] of this.heartbeatSubs) {
+        if (seenIds.has(instanceId)) continue;
         unsub();
-        this.heartbeatSubs.delete(id);
+        this.heartbeatSubs.delete(instanceId);
       }
     } catch (err) {
       this.sendError(null, "discover_failed", (err as Error).message);
@@ -184,8 +214,8 @@ export class Bridge {
   }
 
   private async handlePrompt(msg: Extract<ClientMessage, { kind: "prompt" }>): Promise<void> {
-    const agent = this.agentsByInstanceId.get(msg.instanceId);
-    if (!agent) {
+    const ref = this.agentsByInstanceId.get(msg.instanceId);
+    if (!ref) {
       this.sendError(
         msg.id,
         "agent_not_found",
@@ -203,7 +233,7 @@ export class Bridge {
     }));
 
     try {
-      const stream = await this.openPromptStream(agent, msg.text, attachments, msg.extra, controller.signal);
+      const stream = await this.openPromptStream(ref, msg.text, attachments, msg.extra, controller.signal);
 
       for await (const ev of stream) {
         if (this.closed) break;
@@ -259,7 +289,7 @@ export class Bridge {
   }
 
   private async openPromptStream(
-    agent: Agent,
+    ref: AgentRef,
     text: string,
     attachments: RequestAttachment[] | undefined,
     extra: PromptExtra | undefined,
@@ -268,34 +298,34 @@ export class Bridge {
     // Обычный путь оставляем через официальный SDK: он сам проверяет payload,
     // attachments_ok и timeout-ы. Этот путь используется всеми generic agents.
     if (!extra || Object.keys(extra).length === 0) {
-      return agent.prompt(text, { attachments, signal });
+      return ref.agent.prompt(text, { attachments, signal });
     }
 
     // Weather adapter: SDK Agent.prompt() пока не принимает произвольные extra
     // fields, поэтому формируем protocol envelope вручную и отправляем его в
     // тот же prompt subject. Это ровно тот формат, который Ruby weather agent
     // декодирует как Envelope.extra.
-    return this.promptWithExtra(agent, text, attachments, normalizePromptExtra(extra), signal);
+    return this.promptWithExtra(ref, text, attachments, normalizePromptExtra(extra), signal);
   }
 
   private async *promptWithExtra(
-    agent: Agent,
+    ref: AgentRef,
     text: string,
     attachments: RequestAttachment[] | undefined,
     extra: PromptExtra,
     signal: AbortSignal,
   ): AsyncIterable<StreamMessage> {
-    if (attachments && attachments.length > 0 && agent.promptEndpoint.attachmentsOk === false) {
+    if (attachments && attachments.length > 0 && ref.agent.promptEndpoint.attachmentsOk === false) {
       throw new AttachmentsNotSupportedError();
     }
 
     const payload = encodePromptEnvelope(text, attachments, extra);
-    const maxPayloadBytes = effectiveMaxPayloadBytes(agent, this.nc);
+    const maxPayloadBytes = effectiveMaxPayloadBytes(ref.agent, ref.connection.nc);
     if (maxPayloadBytes !== undefined && payload.byteLength > maxPayloadBytes) {
       throw new PayloadTooLargeError(maxPayloadBytes, payload.byteLength);
     }
 
-    const iter = (await this.nc.requestMany(agent.promptSubject, payload, {
+    const iter = (await ref.connection.nc.requestMany(ref.agent.promptSubject, payload, {
       strategy: "sentinel",
       maxWait: DEFAULT_PROMPT_MAX_WAIT_MS,
     })) as StoppableAsyncIterable<NatsStreamMsg>;
@@ -319,7 +349,7 @@ export class Bridge {
           continue;
         }
         if (!decoded) continue;
-        yield this.decodedChunkToStreamMessage(decoded);
+        yield this.decodedChunkToStreamMessage(ref.connection, decoded);
       }
 
       if (signal.aborted) throw abortError(signal);
@@ -330,7 +360,10 @@ export class Bridge {
     }
   }
 
-  private decodedChunkToStreamMessage(decoded: NonNullable<ReturnType<typeof decodeChunk>>): StreamMessage {
+  private decodedChunkToStreamMessage(
+    connection: BridgeConnection,
+    decoded: NonNullable<ReturnType<typeof decodeChunk>>,
+  ): StreamMessage {
     switch (decoded.type) {
       case "response":
         return decoded.attachments !== undefined
@@ -339,11 +372,11 @@ export class Bridge {
       case "status":
         return { type: "status", status: decoded.status };
       case "query":
-        return this.buildQueryEvent(decoded as DecodedQueryLike);
+        return this.buildQueryEvent(connection, decoded as DecodedQueryLike);
     }
   }
 
-  private buildQueryEvent(decoded: DecodedQueryLike): QueryEvent {
+  private buildQueryEvent(connection: BridgeConnection, decoded: DecodedQueryLike): QueryEvent {
     let replied = false;
     return {
       type: "query",
@@ -357,8 +390,8 @@ export class Bridge {
           typeof answer === "string"
             ? new TextEncoder().encode(answer)
             : encodePromptEnvelope(answer.prompt, answer.attachments as RequestAttachment[] | undefined, {});
-        this.nc.publish(decoded.replySubject, payload);
-        await this.nc.flush();
+        connection.nc.publish(decoded.replySubject, payload);
+        await connection.nc.flush();
       },
     };
   }
@@ -379,35 +412,44 @@ export class Bridge {
   }
 
   private async handleBasicGroupCreate(id: string, controllerInstanceId: string, spec: unknown): Promise<void> {
-    const subject = this.resolveBasicControllerSubject(id, controllerInstanceId, "group.create");
-    if (!subject) return;
+    const target = this.resolveBasicControllerSubject(id, controllerInstanceId, "group.create");
+    if (!target) return;
     try {
-      const rep = await this.nc.request(subject, JSON.stringify(spec ?? {}), { timeout: 20_000 });
+      const rep = await target.connection.nc.request(target.subject, JSON.stringify(spec ?? {}), { timeout: 20_000 });
       const errHeader = rep.headers?.get("Nats-Service-Error-Code");
       if (errHeader) {
         this.sendError(id, errHeader, rep.headers?.get("Nats-Service-Error") ?? "basic group create error");
         return;
       }
       const descriptor = JSON.parse(rep.string()) as BasicGroupSessionDescriptor;
-      await this.ensureAgentKnown(descriptor.instance_id);
-      this.send({ kind: "basic-group-created", id, descriptor });
+      await this.ensureAgentKnown(descriptor.instance_id, target.connection);
+      this.send({
+        kind: "basic-group-created",
+        id,
+        descriptor: {
+          ...descriptor,
+          instance_id: wireInstanceId(target.connection, descriptor.instance_id),
+        },
+      });
     } catch (err) {
       this.sendError(id, "basic_group_create_failed", (err as Error).message);
     }
   }
 
   private async handleBasicGroupStop(id: string, controllerInstanceId: string, sessionId: string): Promise<void> {
-    const subject = this.resolveBasicControllerSubject(id, controllerInstanceId, "group.stop");
-    if (!subject) return;
+    const target = this.resolveBasicControllerSubject(id, controllerInstanceId, "group.stop");
+    if (!target) return;
     try {
-      const rep = await this.nc.request(subject, JSON.stringify({ session_id: sessionId }), { timeout: 10_000 });
+      const rep = await target.connection.nc.request(target.subject, JSON.stringify({ session_id: sessionId }), { timeout: 10_000 });
       const errHeader = rep.headers?.get("Nats-Service-Error-Code");
       if (errHeader) {
         this.sendError(id, errHeader, rep.headers?.get("Nats-Service-Error") ?? "basic group stop error");
         return;
       }
-      for (const [instanceId, agent] of this.agentsByInstanceId) {
+      for (const [instanceId, ref] of this.agentsByInstanceId) {
+        const agent = ref.agent;
         if (
+          ref.connection.id === target.connection.id &&
           agent.agent === "basic" &&
           agent.metadata["role"] === "session" &&
           agent.metadata["session_type"] === "group" &&
@@ -424,10 +466,10 @@ export class Bridge {
   }
 
   private async handleBasicGroupList(id: string, controllerInstanceId: string): Promise<void> {
-    const subject = this.resolveBasicControllerSubject(id, controllerInstanceId, "group.list");
-    if (!subject) return;
+    const target = this.resolveBasicControllerSubject(id, controllerInstanceId, "group.list");
+    if (!target) return;
     try {
-      const rep = await this.nc.request(subject, "", { timeout: 10_000 });
+      const rep = await target.connection.nc.request(target.subject, "", { timeout: 10_000 });
       const errHeader = rep.headers?.get("Nats-Service-Error-Code");
       if (errHeader) {
         this.sendError(id, errHeader, rep.headers?.get("Nats-Service-Error") ?? "basic group list error");
@@ -449,12 +491,13 @@ export class Bridge {
     id: string,
     controllerInstanceId: string,
     endpoint: "group.create" | "group.stop" | "group.list",
-  ): string | null {
-    const agent = this.agentsByInstanceId.get(controllerInstanceId);
-    if (!agent) {
+  ): { subject: string; connection: BridgeConnection } | null {
+    const ref = this.agentsByInstanceId.get(controllerInstanceId);
+    if (!ref) {
       this.sendError(id, "agent_not_found", `no basic controller with instance id ${controllerInstanceId}`);
       return null;
     }
+    const agent = ref.agent;
     if (agent.agent !== "basic" || agent.metadata["role"] !== "controller") {
       this.sendError(id, "not_a_basic_controller", `instance ${controllerInstanceId} is not a basic controller`);
       return null;
@@ -464,25 +507,32 @@ export class Bridge {
       this.sendError(id, "bad_prompt_subject", `bad controller prompt subject: ${agent.promptEndpoint.subject}`);
       return null;
     }
-    return `${tokens[0]}.${endpoint}.${tokens[2]}.${tokens[3]}.${tokens[4]}`;
+    return {
+      subject: `${tokens[0]}.${endpoint}.${tokens[2]}.${tokens[3]}.${tokens[4]}`,
+      connection: ref.connection,
+    };
   }
 
   private startHeartbeatWatch(): void {
-    if (this.heartbeatTracker) return;
-    const tracker = new HeartbeatTracker(this.nc);
-    this.heartbeatTracker = tracker;
-    void tracker.start().catch((e) => {
-      console.warn("[bridge] heartbeat watch failed to start:", (e as Error).message);
-    });
-    this.heartbeatWatchUnsub = tracker.onAnyHeartbeat((hb) => {
-      if (this.closed) return;
-      this.lastHeartbeatAt.set(hb.instanceId, {
-        atMs: Date.now(),
-        intervalS: hb.intervalS || Bridge.DEFAULT_HB_INTERVAL_S,
+    for (const connection of this.connections) {
+      if (this.heartbeatTrackers.has(connection.id)) continue;
+      const tracker = new HeartbeatTracker(connection.nc);
+      this.heartbeatTrackers.set(connection.id, tracker);
+      void tracker.start().catch((e) => {
+        console.warn(`[bridge] heartbeat watch failed to start on ${connection.label}:`, (e as Error).message);
       });
-      if (this.agentsByInstanceId.has(hb.instanceId)) return;
-      void this.ensureAgentKnown(hb.instanceId);
-    });
+      const unsub = tracker.onAnyHeartbeat((hb) => {
+        if (this.closed) return;
+        const instanceId = wireInstanceId(connection, hb.instanceId);
+        this.lastHeartbeatAt.set(instanceId, {
+          atMs: Date.now(),
+          intervalS: hb.intervalS || Bridge.DEFAULT_HB_INTERVAL_S,
+        });
+        if (this.agentsByInstanceId.has(instanceId)) return;
+        void this.ensureAgentKnown(hb.instanceId, connection);
+      });
+      this.heartbeatWatchUnsubs.set(connection.id, unsub);
+    }
   }
 
   private startStaleSweep(): void {
@@ -501,14 +551,15 @@ export class Bridge {
     }
   }
 
-  private async ensureAgentKnown(instanceId: string): Promise<void> {
+  private async ensureAgentKnown(rawInstanceId: string, connection: BridgeConnection): Promise<void> {
+    const instanceId = wireInstanceId(connection, rawInstanceId);
     if (this.agentsByInstanceId.has(instanceId)) return;
     if (this.pendingInstanceLookups.has(instanceId)) return;
     this.pendingInstanceLookups.add(instanceId);
     try {
-      const agent = await this.agents.lookupInstance(instanceId);
+      const agent = await connection.agents.lookupInstance(rawInstanceId);
       if (!agent || this.agentsByInstanceId.has(instanceId)) return;
-      this.registerAgent(agent);
+      this.registerAgent(connection, agent);
     } catch (e) {
       console.warn(`[bridge] lookup for ${instanceId} failed:`, (e as Error).message);
     } finally {
@@ -516,25 +567,26 @@ export class Bridge {
     }
   }
 
-  private registerAgent(agent: Agent): void {
-    this.agentsByInstanceId.set(agent.instanceId, agent);
-    if (!this.lastHeartbeatAt.has(agent.instanceId)) {
-      this.lastHeartbeatAt.set(agent.instanceId, {
+  private registerAgent(connection: BridgeConnection, agent: Agent): void {
+    const instanceId = wireInstanceId(connection, agent.instanceId);
+    this.agentsByInstanceId.set(instanceId, { agent, connection, rawInstanceId: agent.instanceId });
+    if (!this.lastHeartbeatAt.has(instanceId)) {
+      this.lastHeartbeatAt.set(instanceId, {
         atMs: Date.now(),
         intervalS: Bridge.DEFAULT_HB_INTERVAL_S,
       });
     }
-    if (!this.heartbeatSubs.has(agent.instanceId)) {
-      const unsub = this.agents.onHeartbeat(agent.instanceId, (hb) => {
-        this.lastHeartbeatAt.set(agent.instanceId, {
+    if (!this.heartbeatSubs.has(instanceId)) {
+      const unsub = connection.agents.onHeartbeat(agent.instanceId, (hb) => {
+        this.lastHeartbeatAt.set(instanceId, {
           atMs: Date.now(),
           intervalS: hb.intervalS || Bridge.DEFAULT_HB_INTERVAL_S,
         });
-        this.send({ kind: "heartbeat", instanceId: agent.instanceId, ts: hb.ts, intervalS: hb.intervalS });
+        this.send({ kind: "heartbeat", instanceId, ts: hb.ts, intervalS: hb.intervalS });
       });
-      this.heartbeatSubs.set(agent.instanceId, unsub);
+      this.heartbeatSubs.set(instanceId, unsub);
     }
-    this.send({ kind: "agent-added", agent: toDTO(agent) });
+    this.send({ kind: "agent-added", agent: toDTO(agent, connection, instanceId) });
   }
 
   private forgetAgent(instanceId: string): void {
@@ -739,10 +791,17 @@ function safeParse<T>(text: string): T | null {
   }
 }
 
-function toDTO(agent: Agent): DiscoveredAgentDTO {
+function wireInstanceId(connection: BridgeConnection, rawInstanceId: string): string {
+  return `${connection.id}:${rawInstanceId}`;
+}
+
+function toDTO(agent: Agent, connection: BridgeConnection, instanceId: string): DiscoveredAgentDTO {
   const ep = agent.promptEndpoint;
   const dto: DiscoveredAgentDTO = {
-    instanceId: agent.instanceId,
+    instanceId,
+    rawInstanceId: agent.instanceId,
+    connectionId: connection.id,
+    connectionLabel: connection.label,
     agent: agent.agent,
     owner: agent.owner,
     name: agent.name,

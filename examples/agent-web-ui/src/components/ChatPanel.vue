@@ -96,6 +96,7 @@ function onStop(): void {
       <div class="chat-title">
         <span class="chat-agent mono">{{ tagLabel }}</span>
         <span class="chat-name">{{ displayName }}</span>
+        <span class="chat-connection mono">{{ agent.connectionLabel }}</span>
         <span class="chat-owner mono">@{{ agent.owner }}</span>
       </div>
       <div class="chat-sub mono">{{ agent.promptEndpoint.subject }}</div>
@@ -152,6 +153,13 @@ function onStop(): void {
 .chat-owner {
   color: var(--text-muted);
   font-size: var(--text-xs);
+}
+.chat-connection {
+  color: var(--accent-primary);
+  font-size: var(--text-xs);
+  background: var(--accent-glow);
+  padding: 1px 6px;
+  border-radius: var(--border-radius-sm);
 }
 .chat-sub {
   color: var(--text-dim);
