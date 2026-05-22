@@ -185,3 +185,116 @@ origin https://git.giscloud.ru/trizna/nats-synadia-dev.git
 ```
 
 Причина merge: remote `origin/main` уже содержал `Initial commit`, а локальная история проекта была отдельной. Использована стратегия `ours`, чтобы сохранить remote commit в истории и не перетереть текущее содержимое проекта.
+
+### 2026-05-22T08:36:00+03:00
+
+Push:
+
+```text
+0ee0cee main -> origin/main
+```
+
+Pipeline:
+
+```text
+2531 failed
+job 4858 build push failed
+job 4859 deploy skipped
+```
+
+Ошибка из trace:
+
+```text
+fatal: not a git repository (or any of the parent directories): .git
+error: Could not access '55ade9f603c14bb05413dd40346bf8426e9ebb8c'
+Error executing git diff --name-only $CI_COMMIT_BEFORE_SHA $CI_COMMIT_SHA
+```
+
+Причина: `.dockerignore` исключал `.git/`, а `docker/build-images.sh` запускал `build-labels ... changed ...`, которому нужна git history внутри build container.
+
+Решение:
+
+- убрать `.git/` из `.dockerignore`;
+- добавить fallback в `docker/build-images.sh`: если `changed` detection не смог построить plan, выполнить полный `build-labels ... gitlab set_version to_dockerfiles to_compose`.
+
+### 2026-05-22T08:40:00+03:00
+
+Локальная проверка builder image:
+
+```sh
+docker build -q -t build/nats-synadia-dev-local -f docker/Dockerfile.build .
+docker run --rm ... -e CI_SKIP_PUSH=1 build/nats-synadia-dev-local
+```
+
+Результат: первая проблема с `.git` исправлена, но найдено новое падение:
+
+```text
+Version file not found: /build/.version
+```
+
+Причина: `build-labels ... set_version ...` ожидает корневой `.version`.
+
+Решение: добавить `.version` со значением `0.1.0`.
+
+### 2026-05-22T08:43:00+03:00
+
+Повторная локальная проверка builder image нашла ещё один smoke-only edge case:
+
+```text
+Build ID not found. Please set GITHUB_RUN_NUMBER or CI_PIPELINE_IID environment variable
+```
+
+В GitLab `CI_PIPELINE_IID` должен быть доступен, но wrapper сделан устойчивее:
+
+```sh
+export CI_PIPELINE_IID="${CI_PIPELINE_IID:-${CI_PIPELINE_ID:-0}}"
+```
+
+Так локальный smoke и нестандартный runner не падают из-за отсутствия IID.
+
+### 2026-05-22T08:46:00+03:00
+
+Следующая локальная проверка builder image:
+
+```text
+/build/docker/build-images.sh: line 37: docker: command not found
+```
+
+Причина: `docker/Dockerfile.build` устанавливал `docker-cli-buildx`, но не сам `docker-cli`.
+
+Решение: добавить пакет `docker-cli` в `apk add`.
+
+### 2026-05-22T08:50:00+03:00
+
+Следующая локальная проверка builder image дошла до `docker buildx bake`, но упала:
+
+```text
+Pass "--allow=fs.read=.." to grant requested privileges.
+ERROR: additional privileges requested
+```
+
+Причина: bake plan строит image из context `..`, потому что `docker/docker-compose.yml` лежит в `docker/`, а Dockerfile проекта находится уровнем выше. Новые версии buildx требуют явного filesystem entitlement.
+
+Решение: добавить в wrapper:
+
+```sh
+export BUILDX_BAKE_ENTITLEMENTS_FS="${BUILDX_BAKE_ENTITLEMENTS_FS:-0}"
+```
+
+### 2026-05-22T08:53:00+03:00
+
+Повторная локальная проверка builder image после фиксов:
+
+```sh
+docker build -q -t build/nats-synadia-dev-local -f docker/Dockerfile.build .
+docker run --rm -e CI_SKIP_PUSH=1 ... build/nats-synadia-dev-local
+```
+
+Результат: успешно. `docker buildx bake` собрал app image локально без push.
+
+Проверенный image target:
+
+```text
+builder-registry.builder.giscloud.ru/trizna/nats-synadia-dev/app/main:0.1.0
+builder-registry.builder.giscloud.ru/trizna/nats-synadia-dev/app/main:latest
+```

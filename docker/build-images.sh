@@ -5,8 +5,17 @@ cd /build/docker
 
 export REGISTRY_HOST="${CI_REGISTRY_HOST:-builder-registry.builder.giscloud.ru}"
 export OTEL_RESOURCE_ATTRIBUTES="service.name=docker-builder,pipeline.id=${CI_PIPELINE_ID:-local},project.name=${CI_PROJECT_NAME:-nats-synadia-dev}"
+export CI_PIPELINE_IID="${CI_PIPELINE_IID:-${CI_PIPELINE_ID:-0}}"
+export BUILDX_BAKE_ENTITLEMENTS_FS="${BUILDX_BAKE_ENTITLEMENTS_FS:-0}"
 
-build-labels -n -c docker-compose.yml changed gitlab set_version to_dockerfiles to_compose | tee bake.yml
+# `changed` ускоряет CI, но ему нужна .git history внутри build container.
+# Если GitLab отдал shallow checkout без нужного before SHA, не валим pipeline:
+# fallback строит targets из docker-compose.yml целиком. Для этого маленького
+# проекта один image, поэтому full fallback дешевле, чем ручной перезапуск.
+if ! build-labels -n -c docker-compose.yml changed gitlab set_version to_dockerfiles to_compose | tee bake.yml; then
+  echo "[build] changed target detection failed; falling back to full build-labels plan"
+  build-labels -n -c docker-compose.yml gitlab set_version to_dockerfiles to_compose | tee bake.yml
+fi
 
 push_args=()
 if [ -z "${CI_SKIP_PUSH:-}" ]; then
