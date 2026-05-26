@@ -1,11 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import AgentStatusDot from "./AgentStatusDot.vue";
 import type { DiscoveredAgentDTO } from "../wire.ts";
-import { basicControllerForConnection, bucketOf, BUCKETS, removeAgent, type Bucket } from "../stores/agents.ts";
-import { clearSession } from "../stores/chat.ts";
-import { selectionState, toggleSelection } from "../stores/selection.ts";
-import { useBridge } from "../composables/useBridge.ts";
+import { bucketOf, BUCKETS, type Bucket } from "../stores/agents.ts";
 
 const props = defineProps<{
   agent: DiscoveredAgentDTO;
@@ -14,51 +11,19 @@ const props = defineProps<{
 
 defineEmits<{ select: [instanceId: string] }>();
 
-const bridge = useBridge();
-const stoppingGroup = ref(false);
-const stopError = ref<string | null>(null);
-
 const bucket = computed<Bucket>(() => bucketOf(props.agent));
 
-const isController = computed(() => bucket.value === BUCKETS.BASIC_CONTROL);
-const isBasicPersona = computed(() => bucket.value === BUCKETS.BASIC_PERSONA);
-const isBasicGroupSession = computed(() => bucket.value === BUCKETS.BASIC_GROUP_SESSION);
-
 const tagLabel = computed<string>(() => {
-  switch (bucket.value) {
-    case BUCKETS.BASIC_CONTROL:
-      return "BASIC CONTROL";
-    case BUCKETS.BASIC_PERSONA:
-      return "BASIC PERSONA";
-    case BUCKETS.BASIC_GROUP_SESSION:
-      return "BASIC GROUP";
-    case BUCKETS.OPENCLAW:
-      return "OPENCLAW";
-    default:
-      return props.agent.agent.toUpperCase();
-  }
+  if (bucket.value === BUCKETS.YOUTRACK) return "YOUTRACK";
+  return props.agent.agent.toUpperCase();
 });
 
 const tagColor = computed<string>(() => {
-  switch (bucket.value) {
-    case BUCKETS.BASIC_PERSONA:
-      return "var(--accent-primary)";
-    case BUCKETS.BASIC_GROUP_SESSION:
-      return "var(--bucket-virtual)";
-    case BUCKETS.BASIC_CONTROL:
-      return "var(--bucket-headless)";
-    case BUCKETS.OPENCLAW:
-      return "var(--bucket-openclaw)";
-    default:
-      return "var(--bucket-other)";
-  }
+  if (bucket.value === BUCKETS.YOUTRACK) return "var(--accent-primary)";
+  return "var(--bucket-other)";
 });
 
-const subtitle = computed<string>(() => {
-  if (isBasicPersona.value) return props.agent.metadata?.["persona_name"] ?? props.agent.name;
-  if (isBasicGroupSession.value) return props.agent.metadata?.["group_label"] ?? props.agent.session ?? props.agent.name;
-  return props.agent.session ?? props.agent.name;
-});
+const subtitle = computed<string>(() => props.agent.session ?? props.agent.name);
 
 const humanPayload = computed(() => {
   const n = props.agent.promptEndpoint.maxPayloadBytes;
@@ -68,64 +33,15 @@ const humanPayload = computed(() => {
   return `${n} B`;
 });
 
-const model = computed(() => props.agent.metadata?.["model"] ?? null);
-const targetPersonas = computed(() => props.agent.metadata?.["target_personas"] ?? null);
-const groupStopId = computed(() => props.agent.metadata?.["group_id"] ?? props.agent.name);
-
-const multiSelectable = computed(() => isBasicPersona.value);
-const isMultiSelected = computed(() => selectionState.ids.has(props.agent.instanceId));
-
-function onToggleSelect(e: Event): void {
-  e.stopPropagation();
-  toggleSelection(props.agent.instanceId);
-}
-
-async function onStopGroup(e: Event): Promise<void> {
-  e.preventDefault();
-  e.stopPropagation();
-  if (!isBasicGroupSession.value || stoppingGroup.value) return;
-
-  // UI не знает NATS subject `group.stop` напрямую. Он просит найденный
-  // BASIC CONTROL сделать stop, а Bun bridge уже отправляет NATS request.
-  const controller = basicControllerForConnection(props.agent.connectionId);
-  if (!controller) {
-    stopError.value = "BASIC CONTROL не найден";
-    return;
-  }
-
-  const groupId = groupStopId.value.trim();
-  if (!groupId) {
-    stopError.value = "у group session нет group_id/name";
-    return;
-  }
-
-  stoppingGroup.value = true;
-  stopError.value = null;
-  try {
-    await bridge.basicGroupStop(controller.instanceId, groupId);
-
-    // Bridge обычно сам пришлёт `agent-removed`, но локальная очистка делает
-    // поведение мгновенным и безопасным, если событие уже было обработано.
-    clearSession(props.agent.instanceId);
-    removeAgent(props.agent.instanceId);
-  } catch (err) {
-    stopError.value = (err as Error).message;
-  } finally {
-    stoppingGroup.value = false;
-  }
-}
+const role = computed(() => props.agent.metadata?.["role"] ?? null);
+const mode = computed(() => props.agent.metadata?.["mode"] ?? null);
 </script>
 
 <template>
   <div class="card-wrap" :style="{ '--tag-color': tagColor }">
     <div
       class="card"
-      :class="{
-        selected,
-        'is-controller': isController,
-        'is-group': isBasicGroupSession,
-        'is-multi-selected': isMultiSelected,
-      }"
+      :class="{ selected }"
       role="button"
       tabindex="0"
       @click="$emit('select', agent.instanceId)"
@@ -133,49 +49,11 @@ async function onStopGroup(e: Event): Promise<void> {
       @keydown.space.prevent="$emit('select', agent.instanceId)"
     >
       <header class="card-head">
-        <button
-          v-if="multiSelectable"
-          type="button"
-          class="select-circle"
-          :class="{ active: isMultiSelected }"
-          role="checkbox"
-          :aria-checked="isMultiSelected ? 'true' : 'false'"
-          :title="isMultiSelected ? 'Убрать из group prompt' : 'Добавить в group prompt'"
-          @click="onToggleSelect"
-        >
-          <svg
-            v-if="isMultiSelected"
-            class="check"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="3"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          ><polyline points="20 6 9 17 4 12" /></svg>
-        </button>
         <div class="head-tags">
           <span class="agent-tag mono">{{ tagLabel }}</span>
-          <span v-if="isController" class="role-badge mono">CONTROLLER</span>
+          <span v-if="role" class="role-badge mono">{{ role }}</span>
         </div>
-        <div class="head-actions">
-          <button
-            v-if="isBasicGroupSession"
-            type="button"
-            class="stop-group-btn"
-            :class="{ busy: stoppingGroup }"
-            :disabled="stoppingGroup"
-            title="Удалить group session"
-            aria-label="Удалить group session"
-            @click="onStopGroup"
-            @keydown.stop
-          >
-            <span v-if="stoppingGroup" class="mono">...</span>
-            <span v-else aria-hidden="true">×</span>
-          </button>
-          <AgentStatusDot class="status-led" :instance-id="agent.instanceId" />
-        </div>
+        <AgentStatusDot class="status-led" :instance-id="agent.instanceId" />
       </header>
 
       <h3 class="card-title">{{ subtitle }}</h3>
@@ -183,8 +61,7 @@ async function onStopGroup(e: Event): Promise<void> {
       <div class="meta">
         <span class="badge connection mono">{{ agent.connectionLabel }}</span>
         <span class="owner mono">@{{ agent.owner }}</span>
-        <span v-if="model" class="badge mono">{{ model }}</span>
-        <span v-if="targetPersonas" class="badge mono">{{ targetPersonas }}</span>
+        <span v-if="mode" class="badge mono">{{ mode }}</span>
       </div>
 
       <div class="grow-spacer" aria-hidden="true" />
@@ -194,14 +71,10 @@ async function onStopGroup(e: Event): Promise<void> {
       </p>
 
       <div class="badges">
-        <span v-if="humanPayload && !isController" class="badge">{{ humanPayload }}</span>
+        <span v-if="humanPayload" class="badge">{{ humanPayload }}</span>
         <span v-if="agent.promptEndpoint.attachmentsOk" class="badge attachments-ok">attachments</span>
         <span v-if="agent.protocolVersion" class="badge subtle-badge">v{{ agent.protocolVersion }}</span>
       </div>
-
-      <p v-if="isController" class="hint">создаёт group sessions</p>
-      <p v-else-if="isBasicGroupSession" class="hint">хранит общий контекст группы</p>
-      <p v-if="stopError" class="stop-error mono">{{ stopError }}</p>
     </div>
   </div>
 </template>
@@ -227,6 +100,7 @@ async function onStopGroup(e: Event): Promise<void> {
   transition: all var(--transition-normal);
   cursor: pointer;
   width: 100%;
+  min-height: 172px;
   overflow: hidden;
 }
 .card:hover {
@@ -243,17 +117,6 @@ async function onStopGroup(e: Event): Promise<void> {
   background: linear-gradient(135deg, var(--bg-tertiary), var(--bg-secondary));
   box-shadow: var(--shadow-glow);
 }
-.card.is-controller {
-  background: linear-gradient(180deg, var(--bg-secondary) 0%, rgba(167, 139, 250, 0.05) 100%);
-}
-.card.is-group {
-  background: linear-gradient(180deg, var(--bg-secondary) 0%, color-mix(in srgb, var(--bucket-virtual) 7%, transparent) 100%);
-}
-.card.is-multi-selected {
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 55%, transparent),
-    0 0 14px var(--accent-glow);
-}
 .card-head {
   display: flex;
   align-items: center;
@@ -267,161 +130,84 @@ async function onStopGroup(e: Event): Promise<void> {
   min-width: 0;
   flex-wrap: wrap;
 }
-.head-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-xs);
-  flex-shrink: 0;
-}
 .status-led { flex-shrink: 0; }
-
-.stop-group-btn {
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
+.role-badge,
+.agent-tag {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--error) 38%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--error) 9%, transparent);
-  color: var(--error);
-  font-size: 17px;
-  line-height: 1;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-.stop-group-btn:hover:not(:disabled),
-.stop-group-btn:focus-visible {
-  border-color: var(--error);
-  background: color-mix(in srgb, var(--error) 18%, transparent);
-  outline: none;
-}
-.stop-group-btn:disabled {
-  cursor: wait;
-  opacity: 0.75;
-}
-.stop-group-btn.busy {
-  font-size: var(--text-xs);
-}
-
-.select-circle {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  border: 1.5px solid color-mix(in srgb, var(--text-dim) 80%, transparent);
-  background: var(--bg-primary);
-  color: white;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  opacity: 0;
-  transition: all var(--transition-fast);
-  position: relative;
-  z-index: 2;
-}
-.card-wrap:hover .select-circle,
-.select-circle.active,
-.select-circle:focus-visible {
-  opacity: 1;
-}
-.select-circle:hover,
-.select-circle.active {
-  border-color: var(--accent-primary);
-  background: var(--accent-primary);
-}
-.select-circle .check {
-  width: 12px;
-  height: 12px;
-  display: block;
-}
-.role-badge {
-  font-size: 9px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  padding: 1px 6px;
+  min-height: 20px;
+  padding: 2px 7px;
   border-radius: var(--border-radius-sm);
-  color: var(--memory-preference);
-  border: 1px solid color-mix(in srgb, var(--memory-preference) 45%, transparent);
-  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 .agent-tag {
-  font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
   color: var(--tag-color, var(--accent-primary));
-  background: color-mix(in srgb, var(--tag-color, var(--accent-primary)) 14%, transparent);
-  padding: 1px 6px;
-  border-radius: var(--border-radius-sm);
+  background: color-mix(in srgb, var(--tag-color, var(--accent-primary)) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tag-color, var(--accent-primary)) 28%, transparent);
+}
+.role-badge {
+  color: var(--text-muted);
+  border: var(--border-subtle);
 }
 .card-title {
-  font-size: var(--text-base);
-  font-weight: 600;
   color: var(--text-primary);
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: var(--text-lg);
+  line-height: var(--leading-tight);
+  margin: var(--space-xs) 0 0;
+  overflow-wrap: anywhere;
 }
-.meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-  flex-wrap: wrap;
-}
-.owner { color: var(--text-secondary); }
-.grow-spacer {
-  flex: 1;
-  min-height: 0;
-}
-.subject {
-  font-size: 11px;
-  color: var(--text-dim);
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.subject .dim {
-  color: var(--accent-primary);
-  opacity: 0.6;
-  margin-right: 4px;
-}
+.meta,
 .badges {
   display: flex;
-  gap: var(--space-xs);
+  align-items: center;
   flex-wrap: wrap;
-  padding-right: var(--space-md);
+  gap: var(--space-xs);
+}
+.owner {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
 }
 .badge {
-  font-size: 10px;
-  color: var(--text-muted);
-  background: var(--bg-tertiary);
-  padding: 1px 6px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 7px;
   border-radius: var(--border-radius-sm);
+  background: var(--bg-primary);
+  border: var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+.badge.connection {
+  color: var(--accent-primary);
+  background: var(--accent-glow);
+  border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent);
 }
 .attachments-ok {
   color: var(--success);
-  background: var(--success-dim);
 }
 .subtle-badge {
-  color: var(--text-dim);
+  color: var(--text-muted);
 }
-.hint {
-  font-size: 10px;
-  color: var(--text-dim);
-  margin: var(--space-xs) 0 0;
-  font-style: italic;
+.grow-spacer {
+  flex: 1;
 }
-.stop-error {
-  margin: var(--space-xs) 0 0;
-  color: var(--error);
-  font-size: var(--text-xs);
-  line-height: var(--leading-normal);
-  overflow-wrap: anywhere;
+.subject {
+  display: block;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subject .dim {
+  color: var(--text-muted);
+  margin-right: 4px;
 }
 </style>

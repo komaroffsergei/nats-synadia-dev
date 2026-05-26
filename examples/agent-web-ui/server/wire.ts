@@ -3,7 +3,7 @@
 // This project intentionally keeps only the current demo surface:
 // - discovery of NATS agents;
 // - prompt/cancel/query streaming;
-// - basic controller-managed group sessions.
+// - automatic YouTrack webhook messages.
 //
 // Upstream-only control messages that are not part of this educational demo
 // were removed so the wire contract matches this project.
@@ -39,29 +39,6 @@ export type WireAttachment = {
 /** Extra JSON fields added to the prompt envelope for domain-specific agents. */
 export type PromptExtra = Record<string, string | number | boolean | null>;
 
-/** Spec for controller-managed basic group sessions. */
-export type BasicGroupCreateSpec = {
-  personas: string[];
-  label?: string;
-};
-
-/** Descriptor returned by `agents.group.create.basic.<owner>.control`. */
-export type BasicGroupSessionDescriptor = {
-  group_id: string;
-  session_id: string;
-  label: string;
-  subject: string;
-  heartbeat_subject: string;
-  status_subject: string;
-  target_personas: string[];
-  summary_chars: number;
-  turn_count: number;
-  active_request: boolean;
-  created_at: string;
-  last_activity: string;
-  instance_id: string;
-};
-
 // Client -> Server.
 export type ClientMessage =
   | { kind: "discover" }
@@ -74,24 +51,7 @@ export type ClientMessage =
       extra?: PromptExtra;
     }
   | { kind: "cancel"; id: string }
-  | { kind: "query-reply"; id: string; queryId: string; answer: string }
-  | {
-      kind: "basic-group-create";
-      id: string;
-      controllerInstanceId: string;
-      spec: BasicGroupCreateSpec;
-    }
-  | {
-      kind: "basic-group-stop";
-      id: string;
-      controllerInstanceId: string;
-      sessionId: string;
-    }
-  | {
-      kind: "basic-group-list";
-      id: string;
-      controllerInstanceId: string;
-    };
+  | { kind: "query-reply"; id: string; queryId: string; answer: string };
 
 // Server -> Client.
 export type ServerMessage =
@@ -166,20 +126,4 @@ export type ServerMessage =
   | {
       kind: "agent-removed";
       instanceId: string;
-    }
-  | {
-      kind: "basic-group-created";
-      id: string;
-      descriptor: BasicGroupSessionDescriptor;
-    }
-  | {
-      kind: "basic-group-stopped";
-      id: string;
-      sessionId: string;
-    }
-  | {
-      kind: "basic-group-listed";
-      id: string;
-      controllerInstanceId: string;
-      groups: BasicGroupSessionDescriptor[];
     };

@@ -1,0 +1,22 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="white", pad="0.4", nodesep="0.7", ranksep="0.85", fontname="Arial", label="JetStream Data Flow", labelloc="t", fontsize=22];
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=12, color="#334155", fillcolor="#f8fafc"];
+  edge [fontname="Arial", fontsize=11, color="#475569", arrowsize=0.8];
+
+  stream [label="Stream YT_CODEX\nretention=workqueue", fillcolor="#dcfce7"];
+  jobs [label="Subject\nyoutrack.codex.jobs.giscloud", fillcolor="#e0f2fe"];
+  results [label="Subject\nyoutrack.codex.results.giscloud", fillcolor="#f3e8ff"];
+  gateway [label="Gateway", fillcolor="#dbeafe"];
+  workerConsumer [label="Durable consumer\ncodex-worker\nmax_ack_pending=1", fillcolor="#fae8ff"];
+  resultConsumer [label="Durable consumer\nyoutrack-gateway-results", fillcolor="#fae8ff"];
+  worker [label="Codex worker", fillcolor="#fee2e2"];
+
+  gateway -> jobs [label="publish job"];
+  jobs -> stream [label="stored"];
+  stream -> workerConsumer [label="filter jobs"];
+  workerConsumer -> worker [label="pull next"];
+  worker -> results [label="publish result"];
+  results -> stream [label="stored"];
+  stream -> resultConsumer [label="filter results"];
+  resultConsumer -> gateway [label="ack after YouTrack write"];
+}

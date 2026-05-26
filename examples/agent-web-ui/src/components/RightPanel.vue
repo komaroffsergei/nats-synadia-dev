@@ -9,8 +9,8 @@ import ChatPanel from "./ChatPanel.vue";
       <div class="empty-inner">
         <h2>Выбери agent</h2>
         <p>
-          Открой карточку для обычного чата или отметь несколько BASIC PERSONA,
-          чтобы controller создал group session.
+          Открой карточку YouTrack/Codex, чтобы видеть webhook-сообщения и
+          отправлять диагностические prompts.
         </p>
       </div>
     </div>

@@ -2,25 +2,25 @@ import { connectNats, decodeUtf8, formatError, tryDecodeJson } from "./common.js
 
 // Очень простой учебный monitor NATS traffic-а.
 //
-// Он не участвует в работе controller-а и agents.
+// Он не участвует в работе gateway-а, worker-а и agents.
 // Его задача - показать глазами, какие subjects реально бегают по NATS:
 // - agents.prompt.*    пользовательские prompt request-ы;
 // - agents.hb.*        heartbeats от AgentService;
 // - agents.status.*    status/discovery request-ы;
+// - youtrack.codex.*   JetStream jobs/results;
 // - _INBOX.*           reply subjects для request/reply.
 function messageKind(subject) {
   // Грубая классификация только для красивого вывода в терминал.
   // Transport остаётся тем же самым NATS subject-ом, мы ничего не парсим глубоко.
   if (subject.startsWith("agents.hb.")) return "heartbeat";
   if (subject.startsWith("agents.prompt.")) return "prompt";
-  if (subject.startsWith("agents.spawn.")) return "spawn";
-  if (subject.startsWith("agents.list.")) return "list";
-  if (subject.startsWith("agents.group.")) return "group";
-  if (subject.startsWith("agents.personas.")) return "personas";
-  if (subject.startsWith("agents.stop.")) return "stop";
   if (subject.startsWith("agents.status.")) return "status";
+  if (subject.startsWith("youtrack.codex.jobs.")) return "codex-job";
+  if (subject.startsWith("youtrack.codex.results.")) return "codex-result";
+  if (subject.startsWith("youtrack.messages.")) return "youtrack-chat";
   if (subject.startsWith("_INBOX.")) return "reply";
   if (subject.startsWith("$SRV.")) return "service";
+  if (subject.startsWith("$JS.")) return "jetstream";
   return "message";
 }
 
@@ -37,7 +37,7 @@ function formatPayload(data) {
 async function main() {
   // Подписка ">" означает "все subjects".
   // Это удобно локально, но в production так делать шумно и дорого.
-  const nc = await connectNats("basic-monitor");
+  const nc = await connectNats("youtrack-codex-monitor");
   const sub = nc.subscribe(">");
   await nc.flush();
 

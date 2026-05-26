@@ -9,8 +9,6 @@ import { appendMessage } from "../stores/chat.ts";
 import { recordHeartbeat } from "../stores/heartbeats.ts";
 import { randomUUID } from "../uuid.ts";
 import type {
-  BasicGroupCreateSpec,
-  BasicGroupSessionDescriptor,
   ClientMessage,
   DiscoveredAgentDTO,
   PromptExtra,
@@ -29,31 +27,17 @@ export type StreamHandlers = {
   onError?: (message: string, code?: string | number, details?: Record<string, unknown>) => void;
 };
 
-type PendingControl = {
-  resolve: (value: unknown) => void;
-  reject: (err: Error) => void;
-};
-
 let ws: WebSocket | null = null;
 let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingDiscover: { resolve: (a: DiscoveredAgentDTO[]) => void; reject: (e: Error) => void } | null = null;
 
 const streams = new Map<string, StreamHandlers>();
-const pendingControl = new Map<string, PendingControl>();
 
 function connect(): void {
   if (ws) return;
   const url = new URL("/ws", window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  // UI может быть открыт как:
-  //
-  //   /?nats=nats://host1:4222,nats://host2:4222
-  //
-  // Браузер сам к NATS не подключается, поэтому этот query string нужно
-  // передать в Bun bridge WebSocket. Bridge уже откроет NATS client на сервере
-  // и отдаст discovery/prompt поток обратно в этот WebSocket.
-  url.search = window.location.search;
 
   bridgeState.status = "connecting";
   bridgeState.lastError = null;
@@ -84,8 +68,6 @@ function connect(): void {
       pendingDiscover.reject(new Error("connection closed"));
       pendingDiscover = null;
     }
-    for (const p of pendingControl.values()) p.reject(new Error("connection closed"));
-    pendingControl.clear();
     for (const s of streams.values()) s.onError?.("connection closed");
     streams.clear();
 
@@ -161,22 +143,9 @@ function handleServerMessage(msg: ServerMessage): void {
     case "agent-removed":
       removeAgent(msg.instanceId);
       break;
-    case "basic-group-created":
-      resolveControl(msg.id, msg.descriptor);
-      break;
-    case "basic-group-stopped":
-      resolveControl(msg.id, msg.sessionId);
-      break;
-    case "basic-group-listed":
-      resolveControl(msg.id, msg.groups);
-      break;
     case "error":
       if (msg.id && streams.has(msg.id)) {
         streams.get(msg.id)!.onError?.(msg.message, msg.code, msg.details);
-      } else if (msg.id && pendingControl.has(msg.id)) {
-        const entry = pendingControl.get(msg.id)!;
-        pendingControl.delete(msg.id);
-        entry.reject(new Error(msg.message));
       } else if (pendingDiscover) {
         pendingDiscover.reject(new Error(msg.message));
         pendingDiscover = null;
@@ -190,13 +159,6 @@ function handleServerMessage(msg: ServerMessage): void {
 function timestampMs(value: string): number {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : Date.now();
-}
-
-function resolveControl(id: string, value: unknown): void {
-  const entry = pendingControl.get(id);
-  if (!entry) return;
-  pendingControl.delete(id);
-  entry.resolve(value);
 }
 
 function send(msg: ClientMessage): boolean {
@@ -243,48 +205,6 @@ function queryReply(id: string, queryId: string, answer: string): void {
   send({ kind: "query-reply", id, queryId, answer });
 }
 
-function controlRequest<T>(msg: ClientMessage & { id: string }): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    pendingControl.set(msg.id, { resolve: resolve as (value: unknown) => void, reject });
-    if (!send(msg)) {
-      pendingControl.delete(msg.id);
-      reject(new Error("WebSocket not open"));
-    }
-  });
-}
-
-function basicGroupCreate(
-  controllerInstanceId: string,
-  spec: BasicGroupCreateSpec,
-): Promise<BasicGroupSessionDescriptor> {
-  const id = randomUUID();
-  return controlRequest<BasicGroupSessionDescriptor>({
-    kind: "basic-group-create",
-    id,
-    controllerInstanceId,
-    spec,
-  });
-}
-
-function basicGroupStop(controllerInstanceId: string, sessionId: string): Promise<string> {
-  const id = randomUUID();
-  return controlRequest<string>({
-    kind: "basic-group-stop",
-    id,
-    controllerInstanceId,
-    sessionId,
-  });
-}
-
-function basicGroupList(controllerInstanceId: string): Promise<BasicGroupSessionDescriptor[]> {
-  const id = randomUUID();
-  return controlRequest<BasicGroupSessionDescriptor[]>({
-    kind: "basic-group-list",
-    id,
-    controllerInstanceId,
-  });
-}
-
 export function useBridge() {
   connect();
   return {
@@ -293,9 +213,6 @@ export function useBridge() {
     prompt,
     cancel,
     queryReply,
-    basicGroupCreate,
-    basicGroupStop,
-    basicGroupList,
   };
 }
 

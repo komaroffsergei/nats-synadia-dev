@@ -3,52 +3,19 @@ import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-// Production entrypoint для Docker image.
-//
-// В локальном учебном запуске процессы стартуют отдельными командами:
-//   npm run nats
-//   npm run controller
-//   npm run ui
-//
-// В Docker/Swarm нам нужен один browser-facing container, поэтому здесь
-// аккуратно поднимаем несколько процессов рядом:
-//
-// 1. `node src/basic-controller.js` (можно выключить START_BASIC_AGENTS=false)
-//    Создаёт controller/persona/group-session agents и подключается к NATS.
-//
-// 2. `node src/youtrack-codex-agent.js` (START_YOUTRACK_CODEX_AGENT=true)
-//    Слушает локальный HTTP callback от UI proxy и регистрирует
-//    `agents.prompt.youtrack.giscloud.codex`.
-//
-// 3. `bun run server/index.ts`
-//    Раздаёт Vue UI из dist/ и держит WebSocket bridge `/ws`.
-//    Публичный `/youtrack/*` proxy-ит в локальный YouTrack agent на :3401.
-//
-// NATS остаётся отдельным service в `stack/nats-synadia-dev.drs`.
-// Это важно: NATS - транспортная шина, а app container - только demo agents + UI.
-
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(scriptDir, "..");
 const uiDir = join(rootDir, "examples", "agent-web-ui");
 
-const natsUrl =
-  process.env.NATS_URL ||
-  process.env.NATS_SERVERS ||
-  process.env.NATS_SERVICE_URL ||
-  "nats://nats-synadia-dev_nats:4222";
-const natsConnections = process.env.NATS_CONNECTIONS_JSON || process.env.NATS_CONNECTIONS || "";
+const natsUrl = process.env.NATS_URL || "nats://nats-synadia-dev_nats:4222";
+const natsUrlsJson = process.env.NATS_URLS_JSON || "";
 const port = process.env.PORT || "3300";
-const startBasicAgents = !["0", "false", "no", "off"].includes(
-  String(process.env.START_BASIC_AGENTS || "true").toLowerCase(),
-);
-const startYouTrackCodexAgent = !["0", "false", "no", "off"].includes(
-  String(process.env.START_YOUTRACK_CODEX_AGENT || (process.env.YOUTRACK_TOKEN ? "true" : "false")).toLowerCase(),
-);
 const youtrackWebhookPort = process.env.YOUTRACK_WEBHOOK_PORT || "3401";
 
 const childEnv = {
   ...process.env,
   NATS_URL: natsUrl,
+  NATS_URLS_JSON: natsUrlsJson,
   PORT: port,
   YOUTRACK_BASE_URL: process.env.YOUTRACK_BASE_URL || "https://yt.giscloud.ru",
   YOUTRACK_OWNER: process.env.YOUTRACK_OWNER || "giscloud",
@@ -70,67 +37,43 @@ function sleep(ms) {
 }
 
 function parseTcpEndpoint(urlValue) {
-  // Для ожидания NATS нам достаточно host/port.
-  // Если NATS_URL содержит user:pass или token, URL parser их проигнорирует
-  // для TCP check-а, но сами credentials останутся в NATS_URL и будут прочитаны
-  // SDK уже при реальном подключении.
   const parsed = new URL(firstNatsUrl(urlValue));
-  const host = parsed.hostname;
-  const portNumber = Number(parsed.port || 4222);
-  return { host, port: portNumber };
+  return {
+    host: parsed.hostname,
+    port: Number(parsed.port || 4222),
+  };
+}
+
+function firstNatsUrl(urlValue) {
+  return String(urlValue).split(",")[0].trim();
 }
 
 function redactNatsUrl(value) {
   return String(value).replace(/((?:nats|tls|ws|wss)(?:\+[^:]+)?:\/\/)([^@,\/]+)@/g, "$1<redacted>@");
 }
 
-function firstNatsUrl(urlValue) {
-  // NATS clients могут принимать список servers через запятую. TCP wait check
-  // проверяет только первый endpoint: этого достаточно, чтобы не стартовать UI
-  // до доступности хотя бы одного явно указанного NATS service.
-  return String(urlValue).split(",")[0].trim();
+function natsUrlsForWait() {
+  return unique([natsUrl, ...parseNatsUrlsJson(natsUrlsJson)]);
 }
 
-function natsUrlsForWait() {
-  const urls = parseNatsConnections(natsConnections);
-  if (startBasicAgents) urls.unshift(natsUrl);
-  return unique(urls.length > 0 ? urls : [natsUrl]);
+function parseNatsUrlsJson(raw) {
+  const trimmed = String(raw).trim();
+  if (!trimmed) return [];
+  const parsed = JSON.parse(trimmed);
+  if (Array.isArray(parsed)) {
+    return parsed
+      .map((item) => item?.url || item?.servers || "")
+      .map(String)
+      .filter(Boolean);
+  }
+  if (parsed && typeof parsed === "object") {
+    return Object.values(parsed).map(String).filter(Boolean);
+  }
+  return [];
 }
 
 function unique(values) {
-  return [...new Set(values)];
-}
-
-function parseNatsConnections(raw) {
-  const trimmed = String(raw).trim();
-  if (!trimmed) return [];
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    return parseNatsConnectionsJson(trimmed);
-  }
-  return trimmed
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const eqAt = entry.indexOf("=");
-      return eqAt >= 0 ? entry.slice(eqAt + 1).trim() : entry;
-    })
-    .filter((value) => value && !value.startsWith("context:"));
-}
-
-function parseNatsConnectionsJson(raw) {
-  const parsed = JSON.parse(raw);
-  const values = [];
-  if (Array.isArray(parsed)) {
-    for (const item of parsed) {
-      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-      const value = item.url || item.servers || (item.context ? `context:${item.context}` : "");
-      if (value) values.push(String(value));
-    }
-  } else if (parsed && typeof parsed === "object") {
-    for (const value of Object.values(parsed)) values.push(String(value));
-  }
-  return values.filter((value) => value && !value.startsWith("context:"));
+  return [...new Set(values.filter(Boolean))];
 }
 
 async function waitForTcp(urlValue, timeoutMs = 60_000) {
@@ -161,8 +104,7 @@ async function waitForTcp(urlValue, timeoutMs = 60_000) {
 }
 
 function start(label, command, args, options = {}) {
-  const safeArgs = args.map((arg) => redactNatsUrl(arg));
-  console.log(`[prod] starting ${label}: ${command} ${safeArgs.join(" ")}`);
+  console.log(`[prod] starting ${label}: ${command} ${args.map(redactNatsUrl).join(" ")}`);
   const child = spawn(command, args, {
     cwd: options.cwd || rootDir,
     env: childEnv,
@@ -197,18 +139,7 @@ process.once("SIGTERM", () => stopAll("SIGTERM"));
 
 await Promise.all(natsUrlsForWait().map((url) => waitForTcp(url)));
 
-if (startBasicAgents) {
-  start("controller", "node", ["src/basic-controller.js"]);
-} else {
-  console.log("[prod] START_BASIC_AGENTS=false, starting UI bridge only");
-}
-
-if (startYouTrackCodexAgent) {
-  start("youtrack-codex", "node", ["src/youtrack-codex-agent.js"]);
-} else {
-  console.log("[prod] START_YOUTRACK_CODEX_AGENT=false or YOUTRACK_TOKEN missing, skipping YouTrack Codex agent");
-}
-
+start("youtrack-gateway", "node", ["src/youtrack-gateway.js"]);
 start("ui", "bun", ["run", "server/index.ts", "--host", process.env.HOST || "0.0.0.0", "--port", port], {
   cwd: uiDir,
 });

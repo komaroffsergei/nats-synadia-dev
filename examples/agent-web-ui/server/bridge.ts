@@ -4,7 +4,7 @@
 // connection. Each browser connection gets its own Bridge instance with:
 // - last discovery snapshot;
 // - active prompt streams;
-// - pending controller requests.
+// - YouTrack auto-message subscriptions.
 
 import type { ServerWebSocket } from "bun";
 import {
@@ -26,7 +26,6 @@ import {
   type StreamMessage,
 } from "@synadia-ai/agents";
 import type {
-  BasicGroupSessionDescriptor,
   ClientMessage,
   DiscoveredAgentDTO,
   PromptExtra,
@@ -37,8 +36,7 @@ type ActiveStream = { controller: AbortController };
 export type BridgeConnection = {
   id: string;
   label: string;
-  context?: string;
-  servers?: string;
+  servers: string;
   nc: NatsConnection;
   agents: Agents;
 };
@@ -91,8 +89,7 @@ export class Bridge {
     private readonly connections: BridgeConnection[],
     private readonly sdkProtocolVersion: string,
     // Default connections live for the whole Bun process.
-    // Connections opened by `?nats=...` belong to one browser WebSocket only,
-    // so Bridge must close them when that WebSocket closes.
+    // The flag is kept only for future per-request bridge connections.
     private readonly closeConnectionsOnClose = false,
   ) {}
 
@@ -134,15 +131,6 @@ export class Bridge {
         break;
       case "query-reply":
         void this.handleQueryReply(msg.id, msg.queryId, msg.answer);
-        break;
-      case "basic-group-create":
-        void this.handleBasicGroupCreate(msg.id, msg.controllerInstanceId, msg.spec);
-        break;
-      case "basic-group-stop":
-        void this.handleBasicGroupStop(msg.id, msg.controllerInstanceId, msg.sessionId);
-        break;
-      case "basic-group-list":
-        void this.handleBasicGroupList(msg.id, msg.controllerInstanceId);
         break;
       default: {
         const anyMsg = msg as { kind?: string };
@@ -335,10 +323,9 @@ export class Bridge {
       return ref.agent.prompt(text, { attachments, signal });
     }
 
-    // Weather adapter: SDK Agent.prompt() пока не принимает произвольные extra
-    // fields, поэтому формируем protocol envelope вручную и отправляем его в
-    // тот же prompt subject. Это ровно тот формат, который Ruby weather agent
-    // декодирует как Envelope.extra.
+    // Generic adapter path: SDK Agent.prompt() accepts text/attachments only.
+    // If a future UI sends extra JSON fields, keep the same prompt subject and
+    // build the protocol envelope manually.
     return this.promptWithExtra(ref, text, attachments, normalizePromptExtra(extra), signal);
   }
 
@@ -445,108 +432,6 @@ export class Bridge {
     }
   }
 
-  private async handleBasicGroupCreate(id: string, controllerInstanceId: string, spec: unknown): Promise<void> {
-    const target = this.resolveBasicControllerSubject(id, controllerInstanceId, "group.create");
-    if (!target) return;
-    try {
-      const rep = await target.connection.nc.request(target.subject, JSON.stringify(spec ?? {}), { timeout: 20_000 });
-      const errHeader = rep.headers?.get("Nats-Service-Error-Code");
-      if (errHeader) {
-        this.sendError(id, errHeader, rep.headers?.get("Nats-Service-Error") ?? "basic group create error");
-        return;
-      }
-      const descriptor = JSON.parse(rep.string()) as BasicGroupSessionDescriptor;
-      await this.ensureAgentKnown(descriptor.instance_id, target.connection);
-      this.send({
-        kind: "basic-group-created",
-        id,
-        descriptor: {
-          ...descriptor,
-          instance_id: wireInstanceId(target.connection, descriptor.instance_id),
-        },
-      });
-    } catch (err) {
-      this.sendError(id, "basic_group_create_failed", (err as Error).message);
-    }
-  }
-
-  private async handleBasicGroupStop(id: string, controllerInstanceId: string, sessionId: string): Promise<void> {
-    const target = this.resolveBasicControllerSubject(id, controllerInstanceId, "group.stop");
-    if (!target) return;
-    try {
-      const rep = await target.connection.nc.request(target.subject, JSON.stringify({ session_id: sessionId }), { timeout: 10_000 });
-      const errHeader = rep.headers?.get("Nats-Service-Error-Code");
-      if (errHeader) {
-        this.sendError(id, errHeader, rep.headers?.get("Nats-Service-Error") ?? "basic group stop error");
-        return;
-      }
-      for (const [instanceId, ref] of this.agentsByInstanceId) {
-        const agent = ref.agent;
-        if (
-          ref.connection.id === target.connection.id &&
-          agent.agent === "basic" &&
-          agent.metadata["role"] === "session" &&
-          agent.metadata["session_type"] === "group" &&
-          agent.name === sessionId
-        ) {
-          this.forgetAgent(instanceId);
-          break;
-        }
-      }
-      this.send({ kind: "basic-group-stopped", id, sessionId });
-    } catch (err) {
-      this.sendError(id, "basic_group_stop_failed", (err as Error).message);
-    }
-  }
-
-  private async handleBasicGroupList(id: string, controllerInstanceId: string): Promise<void> {
-    const target = this.resolveBasicControllerSubject(id, controllerInstanceId, "group.list");
-    if (!target) return;
-    try {
-      const rep = await target.connection.nc.request(target.subject, "", { timeout: 10_000 });
-      const errHeader = rep.headers?.get("Nats-Service-Error-Code");
-      if (errHeader) {
-        this.sendError(id, errHeader, rep.headers?.get("Nats-Service-Error") ?? "basic group list error");
-        return;
-      }
-      const body = JSON.parse(rep.string()) as { groups?: BasicGroupSessionDescriptor[] };
-      this.send({
-        kind: "basic-group-listed",
-        id,
-        controllerInstanceId,
-        groups: body.groups ?? [],
-      });
-    } catch (err) {
-      this.sendError(id, "basic_group_list_failed", (err as Error).message);
-    }
-  }
-
-  private resolveBasicControllerSubject(
-    id: string,
-    controllerInstanceId: string,
-    endpoint: "group.create" | "group.stop" | "group.list",
-  ): { subject: string; connection: BridgeConnection } | null {
-    const ref = this.agentsByInstanceId.get(controllerInstanceId);
-    if (!ref) {
-      this.sendError(id, "agent_not_found", `no basic controller with instance id ${controllerInstanceId}`);
-      return null;
-    }
-    const agent = ref.agent;
-    if (agent.agent !== "basic" || agent.metadata["role"] !== "controller") {
-      this.sendError(id, "not_a_basic_controller", `instance ${controllerInstanceId} is not a basic controller`);
-      return null;
-    }
-    const tokens = agent.promptEndpoint.subject.split(".");
-    if (tokens.length !== 5 || tokens[0] !== "agents" || tokens[1] !== "prompt") {
-      this.sendError(id, "bad_prompt_subject", `bad controller prompt subject: ${agent.promptEndpoint.subject}`);
-      return null;
-    }
-    return {
-      subject: `${tokens[0]}.${endpoint}.${tokens[2]}.${tokens[3]}.${tokens[4]}`,
-      connection: ref.connection,
-    };
-  }
-
   private startHeartbeatWatch(): void {
     for (const connection of this.connections) {
       if (this.heartbeatTrackers.has(connection.id)) continue;
@@ -577,7 +462,7 @@ export class Bridge {
       if (this.youtrackMessageUnsubs.has(connection.id)) continue;
 
       // Это browser-facing подписка на broadcast, который публикует
-      // `src/youtrack-codex-agent.js` после обработки webhook-а. Она не
+      // `src/youtrack-gateway.js` после обработки webhook-а. Она не
       // отвечает в NATS и не участвует в request/reply ack-е webhook endpoint-а:
       // задача только протолкнуть уже принятое агентом сообщение в открытый UI.
       const sub = connection.nc.subscribe(subject) as StoppableSubscription<NatsStreamMsg>;
@@ -784,9 +669,8 @@ function encodePromptEnvelope(
   attachments: RequestAttachment[] | undefined,
   extra: PromptExtra,
 ): Uint8Array {
-  // SDK encoder currently serializes only prompt/attachments. Для weather
-  // adapter-а нужно сохранить top-level lat/lon, поэтому envelope собирается
-  // здесь вручную в том же JSON shape, который читает Ruby implementation.
+  // SDK encoder currently serializes only prompt/attachments. This manual
+  // envelope keeps optional top-level adapter fields in the same JSON shape.
   const payload: Record<string, unknown> = { ...extra, prompt };
   if (attachments && attachments.length > 0) {
     payload["attachments"] = attachments.map((attachment) => ({

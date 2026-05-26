@@ -1,148 +1,98 @@
 # Code Map
 
-Карта показывает, где лежат ключевые места учебного проекта и что в них важно.
-
 ## Runtime
 
-- `src/basic-controller.js` - главный backend process.
-  Здесь создаются:
-  - controller agent `control`;
-  - persona agents `teacher`, `engineer`, `skeptic`, `manager`, `moderator`;
-  - динамические group session agents `group-N`.
+- `src/common.js` - `.env` loading, `NATS_URL`, NATS connect helper, JSON/UTF-8
+  helpers, small formatting helpers.
+- `src/jetstream.js` - owns JetStream names and setup:
+  - stream `YT_CODEX`;
+  - job subject `youtrack.codex.jobs.giscloud`;
+  - result subject `youtrack.codex.results.giscloud`;
+  - durable consumers `codex-worker` and `youtrack-gateway-results`.
+- `src/youtrack-gateway.js` - public-facing gateway:
+  - registers `agents.prompt.youtrack.giscloud.codex`;
+  - serves `/youtrack/webhook`, `/youtrack/api-check`, `/healthz`;
+  - publishes full webhook JSON to `youtrack.messages.giscloud.codex`;
+  - enqueues Codex jobs into JetStream;
+  - consumes worker results and writes YouTrack custom field/comments.
+- `src/codex-worker.js` - worker process:
+  - consumes `youtrack.codex.jobs.giscloud`;
+  - starts or resumes Codex SDK threads;
+  - reads `skills/youtrack-task-analysis/SKILL.md`;
+  - publishes `session_started`, `analysis_completed`, `analysis_failed`.
+- `src/monitor.js` - optional local NATS traffic monitor.
 
-- `src/basic-controller.js#createControllerAgent()` - место, где описан controller.
-  Ключевой marker: `extraMetadata.role = "controller"`.
-  Это прикладная metadata для UI, а не отдельный класс NATS.
+## Step-By-Step Algorithm
 
-- `src/basic-controller.js#createGroupSession()` - endpoint `agents.group.create.basic.demo.control`.
-  Получает список persona ids и создаёт новый `AgentService` с `role=session`.
+1. YouTrack sends `POST /youtrack/webhook`.
+   Code: `src/youtrack-gateway.js#handleWebhook`.
 
-- `src/basic-controller.js#streamGroupAnswer()` - основной group-flow.
-  Последовательно спрашивает выбранные persona agents, собирает ответы, делает итоговый synthesis и сохраняет turn в `groupSessions`.
+2. Gateway normalizes payload.
+   Code: `normalizeWebhookPayload()` extracts `issueId`, `event`,
+   `changedFields`, `summary`, `description`.
 
-- `src/basic-controller.js#groupSessions` - in-memory общий контекст групп.
-  После рестарта process он исчезает. Для production это место можно заменить на NATS KV/JetStream.
+3. Gateway publishes full chat JSON.
+   Code: `publishWebhookChatMessage()` publishes to
+   `youtrack.messages.giscloud.codex`; UI bridge subscribes in
+   `examples/agent-web-ui/server/bridge.ts#startYouTrackMessageWatch`.
 
-- `src/common.js` - общая конфигурация и helper-ы:
-  `NATS_URL`, alias-ы `NATS_SERVERS`/`NATS_SERVICE_URL`, `BASIC_OWNER`, `OLLAMA_BASE_URL`, `connectNats()`, `streamOllama()`.
+4. Gateway enqueues a JetStream job.
+   Code: `enqueueCodexJob()` reads `Codex Session ID` from YouTrack, then
+   publishes a job to `youtrack.codex.jobs.giscloud`.
 
-- `src/personas.js` - список "личностей".
-  Разные ответы получаются не из-за разных моделей, а из-за разных `systemPrompt`.
+5. Worker runs or resumes Codex.
+   Code: `src/codex-worker.js#processJob`.
+   If `job.sessionId` exists, it calls `codex.resumeThread(sessionId)`;
+   otherwise it calls `codex.startThread()`.
 
-- `src/monitor.js` - учебный NATS traffic monitor.
-  Нужен, чтобы смотреть subjects и payload-ы во время экспериментов.
+6. Worker publishes result events.
+   Code: `publishResult()` sends results to `youtrack.codex.results.giscloud`.
 
-- `src/youtrack-agent.js` - локальный read-only YouTrack agent.
-  Регистрирует `agents.prompt.youtrack.monitorsoft.triage`, читает задачи через
-  REST API и ничего не пишет обратно в YouTrack.
-
-- `src/youtrack-codex-agent.js` - минимальный `yt.giscloud.ru` webhook/API-check agent.
-  Регистрирует `agents.prompt.youtrack.giscloud.codex`, поднимает HTTP endpoints
-  `/youtrack/webhook`, `/youtrack/api-check`, `/youtrack/webhooks/last`,
-  `/youtrack/agent-messages` и проверяет, что YouTrack REST API доступен
-  напрямую по bearer token без внешнего auth barrier.
-  Callback flow: HTTP webhook делает NATS request в
-  `youtrack.hooks.giscloud.codex`, а subscription внутри agent process пишет
-  событие и полный webhook `payload` в `recentAgentMessages`; затем agent
-  публикует `youtrack.messages.giscloud.codex`, чтобы открытый Web UI сразу
-  добавил JSON-сообщение в чат YouTrack-агента. Prompt `hooks` читает тот же
-  журнал, но выводит короткие заголовки.
+7. Gateway writes back to YouTrack.
+   Code: `handleResultEvent()`:
+   - `session_started` -> update text custom field `Codex Session ID` and add a
+     start comment;
+   - `analysis_completed` -> add result comment;
+   - `analysis_failed` -> add failure comment.
 
 ## Web UI
 
-- `examples/agent-web-ui/server/index.ts` - Bun HTTP/WebSocket server.
-  Раздаёт `dist/`, держит `/ws`, отдаёт `/healthz` для deploy-smoke.
-  Публичные `/youtrack/*` proxy-ит в локальный `youtrack-codex-agent`
-  (`YOUTRACK_WEBHOOK_PROXY_TARGET`, default `http://127.0.0.1:3401`), потому
-  dry-stack ingress открыт на один browser-facing service port.
-  NATS можно задать через адресную строку `?nats=nats://host:4222`,
-  `--nats-url`, `--servers`, `NATS_URL`, `NATS_SERVERS`, `NATS_SERVICE_URL`.
-  Query-param имеет приоритет для конкретного browser WebSocket.
-  Несколько независимых NATS задаются через `NATS_CONNECTIONS_JSON` или
-  локальный короткий `NATS_CONNECTIONS=name=url;name2=url2`.
+- `examples/agent-web-ui/server/config.ts` - parses `NATS_URL` and optional
+  `NATS_URLS_JSON`.
+- `examples/agent-web-ui/server/index.ts` - Bun HTTP/WebSocket server:
+  - serves `/ws`;
+  - proxies `/youtrack/*` to the local gateway;
+  - `/healthz` reports UI, NATS, gateway and JetStream readiness.
+- `examples/agent-web-ui/server/bridge.ts` - server-side NATS bridge:
+  discovery, prompt streaming, cancel/query reply, heartbeat tracking and
+  YouTrack auto-message forwarding.
+- `examples/agent-web-ui/src/composables/useBridge.ts` - browser WebSocket
+  client.
+- `examples/agent-web-ui/src/stores/agents.ts` - agent list and simple
+  YouTrack/other grouping.
+- `examples/agent-web-ui/src/components/AgentGrid.vue` - cards list.
+- `examples/agent-web-ui/src/components/ChatPanel.vue` - selected agent chat.
+- `examples/agent-web-ui/src/composables/promptStreaming.ts` - builds chat
+  messages from streaming events.
 
-- `examples/agent-web-ui/server/bridge.ts` - bridge между browser WebSocket и `@synadia-ai/agents`.
-  Делает discovery по всем configured NATS connections, prompt streaming,
-  cancel/query reply, а также вызывает group endpoints controller-а через тот
-  NATS client, где найден agent.
-  Для weather adapter-а принимает `extra.lat/lon` и вручную собирает NATS
-  envelope, потому публичный `Agent.prompt()` SDK принимает только text/attachments.
+## Deployment
 
-- `examples/agent-web-ui/src/composables/useBridge.ts` - browser WebSocket client.
-  Передаёт `window.location.search` в `/ws`, поэтому `?nats=...` из адресной
-  строки действительно доходит до Bun bridge.
+- `docker/Dockerfile` - one image with Node, Bun, root dependencies and built UI.
+- `scripts/start-production.js` - app service entrypoint; waits for NATS, starts
+  `src/youtrack-gateway.js` and Bun UI server.
+- `stack/nats-synadia-dev.drs` - dry-stack definition:
+  - `nats` service with JetStream enabled;
+  - `app` service with `YOUTRACK_TOKEN`;
+  - `codex_worker` service with OpenAI/Codex env but without YouTrack token.
+- `.gitlab-ci.yml` - build/deploy wrapper and env forwarding.
 
-- `examples/agent-web-ui/server/wire.ts` - wire-contract между browser и Bun bridge.
-  Здесь оставлен только текущий demo surface: discovery, prompt streaming,
-  prompt `extra` для adapter-ов и `basic-group-*`.
-  `DiscoveredAgentDTO.instanceId` получает prefix connection-а, а raw id хранится
-  в `rawInstanceId`.
+## Important Env
 
-- `examples/agent-web-ui/src/stores/agents.ts` - классификация найденных agents.
-  `bucketOf()` читает metadata и раскладывает карточки на persona/controller/group/openclaw/other.
-
-- `examples/agent-web-ui/src/stores/selection.ts` - состояние галочек.
-  Это только `Set<instanceId>`, общий контекст здесь не хранится.
-
-- `examples/agent-web-ui/src/components/MultiSelectBar.vue` - групповой prompt из UI.
-  Если выбраны basic personas, компонент просит controller создать group session и отправляет первый prompt уже в `group-N`.
-
-- `examples/agent-web-ui/src/components/AgentCard.vue` - карточка agent-а.
-  Для `BASIC GROUP` здесь находится кнопка `×`: она ищет `BASIC CONTROL`, вызывает `basicGroupStop()`, убирает карточку и чистит локальный chat state.
-
-- `examples/agent-web-ui/src/components/ChatPanel.vue` - правый чат выбранного agent-а или group session.
-  Здесь включается weather adapter для `agents.prompt.weather.dev.h100`.
-
-- `examples/agent-web-ui/src/components/PromptArea.vue` - ввод prompt-а.
-  Для weather agent-а показывает поля `lat/lon` и примеры "Йошкар-Ола",
-  "Омск", "Сводка".
-
-- `examples/agent-web-ui/src/composables/promptStreaming.ts` - сборка streaming events в сообщения чата.
-  Передаёт prompt `extra` в bridge и показывает lat/lon в истории сообщения.
-
-
-## OpenClaw
-
-- `plugins/basic-tools/index.js` - локальный OpenClaw plugin.
-  Tool `basic_ask` отправляет вопрос в `agents.prompt.basic.demo.control`.
-
-- `plugins/basic-tools/openclaw.plugin.json` - manifest plugin-а.
-
-- `scripts/prepare-openclaw-nats-channel.js` - готовит официальный Synadia NATS channel для OpenClaw.
-
-- `scripts/prepare-openclaw-basic-tools.js` - регистрирует локальный `/basic` command/tool.
-
-## Публикация
-
-- `.gitlab-ci.yml` - build/deploy pipeline по аналогии с `webrtc-komaroff`.
-
-- `docker/Dockerfile` - production image: Node + Bun, UI build, запуск `scripts/start-production.js`.
-
-- `scripts/start-production.js` - один container entrypoint.
-  Ждёт NATS TCP, запускает Bun UI server и, если `START_BASIC_AGENTS` не выключен,
-  поднимает controller/persona agents рядом.
-  Если задан `NATS_CONNECTIONS_JSON` или `NATS_CONNECTIONS`, ждёт TCP доступность
-  всех URL из этого списка.
-
-- `docker/docker-compose.yml` - build-labels target для image `trizna/nats-synadia-dev/app/<branch>`.
-
-- `stack/nats-synadia-dev.drs` - dry-stack deployment:
-  `nats` service + публичный `app` service на `nats-synadia-dev.gis-master.ru`.
-  `NATS_URL` внутри stack-а можно переопределить env-ами `NATS_URL`/`NATS_SERVERS`/`NATS_SERVICE_URL`.
-  `app` запускает `youtrack-codex-agent` при `START_YOUTRACK_CODEX_AGENT=true`
-  и пробрасывает `YOUTRACK_TOKEN` из GitLab CI variables.
-  `NATS_CONNECTIONS_JSON` и `NATS_CONNECTIONS` пробрасываются в UI для multi-NATS discovery.
-  `NATS_EXTERNAL_NETWORK` дополнительно подключает `app` к уже существующей docker network,
-  например `rag-stack_default` для NATS из `nats-agent-ruby`.
-  `START_BASIC_AGENTS=false` переводит production container в UI-only режим.
-
-- `stack/deploy.sh` - deploy wrapper с поддержкой GitLab SSH key variables и retry.
-
-- `docs/publishing/2026-05-22-publication-log.md` - журнал публикации, ошибок и решений без секретов.
-
-- `docs/NATS_CONNECTIONS.md` - найденные NATS endpoints:
-  local demo, production demo, `voice-chat` `audio_nats` и H100 leafnode endpoint.
-
-- `docs/DEPLOY_SCENARIOS.md` - варианты deploy-а:
-  isolated demo, UI-only dashboard поверх чужого NATS, UI + demo agents,
-  weather adapter, monitor service и reviewer/controller.
+- `NATS_URL` - main NATS bus for app, gateway and worker.
+- `NATS_URLS_JSON` - optional UI-only multi-NATS discovery.
+- `YOUTRACK_BASE_URL`, `YOUTRACK_TOKEN`, `YOUTRACK_CODEX_SESSION_FIELD`.
+- `YOUTRACK_AGENT_MESSAGE_SUBJECT`.
+- `YT_CODEX_STREAM`, `YT_CODEX_JOB_SUBJECT`, `YT_CODEX_RESULT_SUBJECT`.
+- `OPENAI_API_KEY` or `CODEX_API_KEY`.
+- `CODEX_DRY_RUN=true` for local smoke without a live model.
+- `YOUTRACK_DRY_RUN=true` for local smoke without YouTrack writes.

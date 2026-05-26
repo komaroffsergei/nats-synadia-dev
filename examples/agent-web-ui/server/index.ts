@@ -13,7 +13,6 @@ import { existsSync, statSync } from "node:fs";
 import {
   Agents,
   SDK_PROTOCOL_VERSION,
-  loadContextOptions,
   parseNatsUrl,
   type NatsConnection,
 } from "@synadia-ai/agents";
@@ -21,33 +20,22 @@ import {
   connect as natsConnect,
   type NodeConnectionOptions,
 } from "@nats-io/transport-node";
-import { parseConfig, parseUrlNatsOverride, type NatsConnectionConfig } from "./config.ts";
+import { parseConfig, type NatsConnectionConfig } from "./config.ts";
 import { Bridge, formatSdkProtocolVersion, type BridgeConnection, type BridgeWsData } from "./bridge.ts";
 
 const config = parseConfig(Bun.argv);
 let defaultConnectionsPromise: Promise<BridgeConnection[]> | null = null;
+type OpenedConnections = { connections: BridgeConnection[]; closeWithBridge: boolean };
 
 async function buildConnectOptions(connection: NatsConnectionConfig): Promise<NodeConnectionOptions> {
-  if (connection.servers) {
-    // `parseNatsUrl` extracts userinfo (token / user:password) — without it
-    // a URL like `nats://TOKEN@host:port` would silently drop the token
-    // because `@nats-io/transport-node` doesn't parse credentials from URLs.
-    // `name` is spread last so the local connection identity wins even if
-    // a future `parseNatsUrl` were to start emitting a `name` field.
-    return { ...parseNatsUrl(connection.servers), name: `testui-${connection.id}` };
-  }
-  const contextName = connection.context ?? "current";
-  return { ...(await loadContextOptions(contextName)), name: `testui-${connection.id}` };
+  return { ...parseNatsUrl(connection.servers), name: `testui-${connection.id}` };
 }
 
 async function openBridgeConnection(connection: NatsConnectionConfig): Promise<BridgeConnection> {
   const connectOpts = await buildConnectOptions(connection);
   const nc: NatsConnection = await natsConnect(connectOpts);
   const agents = new Agents({ nc });
-  const serverInfoNote = connection.servers
-    ? `servers=${redactNatsUrl(connection.servers)}`
-    : `context=${connection.context ?? "current"}`;
-  console.log(`[testui] NATS client connected label=${connection.label} (${serverInfoNote})`);
+  console.log(`[testui] NATS client connected label=${connection.label} (servers=${redactNatsUrl(connection.servers)})`);
   return { ...connection, nc, agents };
 }
 
@@ -65,24 +53,6 @@ function getDefaultConnections(): Promise<BridgeConnection[]> {
   // clients, а каждое окно браузера получает только свой Bridge state.
   defaultConnectionsPromise ??= openConnections(config.connections);
   return defaultConnectionsPromise;
-}
-
-async function openRequestConnections(url: URL): Promise<{ connections: BridgeConnection[]; closeWithBridge: boolean }> {
-  const natsOverride = url.searchParams.get("nats");
-  if (natsOverride !== null) {
-    // URL override намеренно НЕ шарится между пользователями:
-    // конкретная вкладка могла быть открыта для временной проверки чужого NATS.
-    // Поэтому создаём отдельный NATS client и закрываем его вместе с WebSocket.
-    return {
-      connections: await openConnections(parseUrlNatsOverride(natsOverride)),
-      closeWithBridge: true,
-    };
-  }
-
-  return {
-    connections: await getDefaultConnections(),
-    closeWithBridge: false,
-  };
 }
 
 async function closeConnections(connections: BridgeConnection[]): Promise<void> {
@@ -128,6 +98,26 @@ async function proxyYouTrackRequest(req: Request, url: URL): Promise<Response> {
   });
 }
 
+async function fetchGatewayHealth(): Promise<Record<string, unknown> & { ok: boolean }> {
+  try {
+    const response = await fetch(`${youtrackProxyTarget}/healthz`, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(5_000),
+    });
+    const payload = await response.json().catch(() => ({}));
+    return {
+      ok: response.ok && (payload as { ok?: unknown }).ok !== false,
+      status: response.status,
+      ...(payload && typeof payload === "object" ? payload as Record<string, unknown> : {}),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: (error as Error).message,
+    };
+  }
+}
+
 const server = Bun.serve<BridgeWsData>({
   hostname: config.host,
   port: config.port,
@@ -139,11 +129,9 @@ const server = Bun.serve<BridgeWsData>({
     }
 
     if (url.pathname === "/healthz") {
-      let opened: Awaited<ReturnType<typeof openRequestConnections>>;
+      let opened: OpenedConnections;
       try {
-        // `/healthz?nats=...` использует тот же resolver, что и `/ws?nats=...`.
-        // Так можно проверить приоритет адресной строки без открытия браузера.
-        opened = await openRequestConnections(url);
+        opened = { connections: await getDefaultConnections(), closeWithBridge: false };
       } catch (error) {
         return Response.json(
           {
@@ -159,31 +147,29 @@ const server = Bun.serve<BridgeWsData>({
         ok: true,
         service: "synadia-nats-agents-web-ui",
         nats: {
-          mode: natsConnections.length > 1 ? "multi" : (natsConnections[0]?.servers ? "servers" : "context"),
+          mode: natsConnections.length > 1 ? "multi" : "servers",
           connections: natsConnections.map((connection) => ({
             id: connection.id,
             label: connection.label,
-            value: connection.servers
-              ? redactNatsUrl(connection.servers)
-              : `context:${connection.context ?? "current"}`,
+            value: redactNatsUrl(connection.servers),
             server: connection.nc.getServer() || null,
           })),
         },
         sdkProtocolVersion: sdkVersionString,
       };
-      if (opened.closeWithBridge) await closeConnections(natsConnections);
+      const gateway = await fetchGatewayHealth();
+      const ok = body.ok && gateway.ok;
       return Response.json({
         ...body,
-      });
+        gateway,
+        ok,
+      }, { status: ok ? 200 : 503 });
     }
 
     if (url.pathname === "/ws") {
-      let opened: Awaited<ReturnType<typeof openRequestConnections>>;
+      let opened: OpenedConnections;
       try {
-        // Главный switch приоритета NATS для UI:
-        // - есть `?nats=...` -> подключаемся туда;
-        // - нет query-param -> используем CLI/env/default из parseConfig().
-        opened = await openRequestConnections(url);
+        opened = { connections: await getDefaultConnections(), closeWithBridge: false };
       } catch (error) {
         return Response.json(
           {

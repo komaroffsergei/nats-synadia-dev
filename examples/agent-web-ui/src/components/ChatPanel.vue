@@ -15,14 +15,8 @@ const error = ref<string | null>(null);
 
 const tagLabel = computed<string>(() => {
   switch (bucketOf(props.agent)) {
-    case BUCKETS.BASIC_CONTROL:
-      return "BASIC CONTROL";
-    case BUCKETS.BASIC_GROUP_SESSION:
-      return "BASIC GROUP";
-    case BUCKETS.BASIC_PERSONA:
-      return "BASIC PERSONA";
-    case BUCKETS.OPENCLAW:
-      return "OPENCLAW";
+    case BUCKETS.YOUTRACK:
+      return "YOUTRACK";
     default:
       return props.agent.agent.toUpperCase();
   }
@@ -30,14 +24,8 @@ const tagLabel = computed<string>(() => {
 
 const tagColor = computed<string>(() => {
   switch (bucketOf(props.agent)) {
-    case BUCKETS.BASIC_PERSONA:
+    case BUCKETS.YOUTRACK:
       return "var(--accent-primary)";
-    case BUCKETS.BASIC_GROUP_SESSION:
-      return "var(--bucket-virtual)";
-    case BUCKETS.BASIC_CONTROL:
-      return "var(--bucket-headless)";
-    case BUCKETS.OPENCLAW:
-      return "var(--bucket-openclaw)";
     default:
       return "var(--bucket-other)";
   }
@@ -45,22 +33,13 @@ const tagColor = computed<string>(() => {
 
 const displayName = computed(
   () =>
-    props.agent.metadata?.["persona_name"] ??
-    props.agent.metadata?.["group_label"] ??
-    props.agent.session ??
-    props.agent.name,
+    props.agent.session ?? props.agent.name,
 );
 
 const currentMessages = computed(() => messagesFor(props.agent.instanceId));
 const busy = computed(() => getSession(props.agent.instanceId).activePromptId !== null);
 const attachmentsOk = computed(() => props.agent.promptEndpoint.attachmentsOk === true);
 const maxPayloadBytes = computed(() => props.agent.promptEndpoint.maxPayloadBytes);
-const promptAdapter = computed<"weather" | null>(() => {
-  // Пока адаптер один: weather agent из соседнего Ruby сервиса. Проверяем
-  // именно subject, чтобы не завязаться на UI bucket или отсутствующую metadata.
-  if (props.agent.promptEndpoint.subject === "agents.prompt.weather.dev.h100") return "weather";
-  return null;
-});
 
 async function onSubmit(text: string, files: File[], extra?: PromptExtra): Promise<void> {
   let attachments: Awaited<ReturnType<typeof fileToAttachment>>[] | undefined;
@@ -108,7 +87,6 @@ function onStop(): void {
       :disabled="false"
       :attachments-ok="attachmentsOk"
       :max-payload-bytes="maxPayloadBytes"
-      :adapter="promptAdapter"
       @submit="onSubmit"
       @stop="onStop"
     />

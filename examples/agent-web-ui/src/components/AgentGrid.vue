@@ -1,13 +1,10 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import AgentGroup from "./AgentGroup.vue";
-import MultiSelectBar from "./MultiSelectBar.vue";
 import { agentsState, agentSections } from "../stores/agents.ts";
-import { selectionState } from "../stores/selection.ts";
 
 const groups = computed(() => agentSections.value);
 const isEmpty = computed(() => groups.value.length === 0);
-const hasSelection = computed(() => selectionState.ids.size > 0);
 </script>
 
 <template>
@@ -16,7 +13,7 @@ const hasSelection = computed(() => selectionState.ids.size > 0);
       <div>
         <h1 class="grid-title">Synadia NATS Agents</h1>
         <p class="grid-sub">
-          BASIC persona agents, controller и созданные controller-ом group sessions.
+          YouTrack gateway agent, chat stream и NATS discovery.
         </p>
       </div>
     </header>
@@ -26,7 +23,7 @@ const hasSelection = computed(() => selectionState.ids.size > 0);
       <div v-else-if="isEmpty" class="placeholder">
         <h2>Agents не найдены</h2>
         <p>
-          Запусти <code class="mono">npm run controller</code>, затем нажми Refresh.
+          Запусти <code class="mono">npm run gateway</code>, затем нажми Refresh.
         </p>
       </div>
       <div v-else class="groups">
@@ -38,10 +35,6 @@ const hasSelection = computed(() => selectionState.ids.size > 0);
         />
       </div>
     </div>
-
-    <Transition name="bar">
-      <MultiSelectBar v-if="hasSelection" />
-    </Transition>
   </main>
 </template>
 
@@ -102,18 +95,4 @@ const hasSelection = computed(() => selectionState.ids.size > 0);
   padding: 0;
 }
 
-.bar-enter-active,
-.bar-leave-active {
-  transition: transform 0.22s ease, opacity 0.18s ease;
-}
-.bar-enter-from,
-.bar-leave-to {
-  transform: translateY(100%);
-  opacity: 0;
-}
-.bar-enter-to,
-.bar-leave-from {
-  transform: translateY(0);
-  opacity: 1;
-}
 </style>

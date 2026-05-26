@@ -1,52 +1,24 @@
 digraph G {
-  graph [
-    rankdir=LR,
-    bgcolor="white",
-    pad="0.4",
-    nodesep="0.65",
-    ranksep="0.85",
-    fontname="Arial",
-    label="synadia-nats-agents: связь компонентов",
-    labelloc="t",
-    fontsize=22
-  ];
+  graph [rankdir=LR, bgcolor="white", pad="0.4", nodesep="0.7", ranksep="0.9", fontname="Arial", label="YouTrack -> JetStream -> Codex", labelloc="t", fontsize=22];
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=12, color="#334155", fillcolor="#f8fafc"];
+  edge [fontname="Arial", fontsize=11, color="#475569", arrowsize=0.8];
 
-  node [
-    shape=box,
-    style="rounded,filled",
-    fontname="Arial",
-    fontsize=12,
-    color="#334155",
-    fillcolor="#f8fafc"
-  ];
+  youtrack [label="YouTrack\nyt.giscloud.ru", fillcolor="#dbeafe"];
+  app [label="app service\nUI + gateway", fillcolor="#e0f2fe"];
+  ui [label="Synadia Web UI\nVue + Bun bridge", fillcolor="#ecfeff"];
+  gateway [label="YouTrack gateway agent\nagents.prompt.youtrack.giscloud.codex", fillcolor="#f3e8ff"];
+  nats [label="NATS + JetStream\nstream YT_CODEX", fillcolor="#dcfce7"];
+  worker [label="codex_worker\n@openai/codex-sdk", fillcolor="#fae8ff"];
+  codex [label="Local Codex CLI\nread-only sandbox", fillcolor="#fee2e2"];
 
-  edge [
-    fontname="Arial",
-    fontsize=11,
-    color="#475569",
-    arrowsize=0.8
-  ];
-
-  browser [label="Browser\nVue UI", fillcolor="#dbeafe"];
-  bridge [label="Bun bridge\nexamples/agent-web-ui/server", fillcolor="#e0f2fe"];
-  sdk [label="@synadia-ai/agents\nClient + discovery", fillcolor="#ecfeff"];
-  nats [label="NATS\nsubjects + request/reply", fillcolor="#dcfce7"];
-  controller [label="basic controller\nmetadata.role=controller", fillcolor="#f3e8ff"];
-  personas [label="persona agents\nteacher / engineer / skeptic /\nmanager / moderator", fillcolor="#ede9fe"];
-  groups [label="dynamic group sessions\ngroup-1 / group-2 / ...", fillcolor="#fae8ff"];
-  ollama [label="Ollama HTTP API\n/api/chat", fillcolor="#fee2e2"];
-  openclaw [label="OpenClaw\n/basic command + tool", fillcolor="#ffedd5"];
-
-  browser -> bridge [label="WebSocket /ws"];
-  bridge -> sdk [label="discover / prompt / cancel"];
-  sdk -> nats [label="$SRV.INFO.agents\nagents.prompt.*"];
-  nats -> controller [label="control prompt\nextra endpoints"];
-  nats -> personas [label="persona prompts"];
-  controller -> groups [label="create/stop\nAgentService"];
-  groups -> personas [label="fan-out по выбранным ролям"];
-  controller -> personas [label="default delegation\nreview/moderator"];
-  personas -> ollama [label="systemPrompt + user prompt"];
-  groups -> ollama [label="final synthesis"];
-  openclaw -> nats [label="official NATS channel"];
-  openclaw -> controller [label="/basic -> basic_ask"];
+  youtrack -> app [label="POST /youtrack/webhook"];
+  app -> gateway [label="local HTTP :3401"];
+  gateway -> ui [label="chat JSON\nsubject youtrack.messages.*"];
+  gateway -> nats [label="job\nsubject youtrack.codex.jobs.giscloud"];
+  worker -> nats [label="durable pull\ncodex-worker"];
+  worker -> codex [label="start/resume thread"];
+  codex -> worker [label="streamed events"];
+  worker -> nats [label="result\nsubject youtrack.codex.results.giscloud"];
+  nats -> gateway [label="durable result consumer"];
+  gateway -> youtrack [label="custom field + comments"];
 }

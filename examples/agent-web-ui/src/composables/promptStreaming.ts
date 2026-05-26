@@ -32,11 +32,6 @@ export function startPromptStream(
   if (attachments && attachments.length > 0) {
     userMsg.attachments = attachments.map((a) => ({ filename: a.filename, base64: a.base64 }));
   }
-  if (extra && typeof extra["lat"] === "number" && typeof extra["lon"] === "number") {
-    // Показываем координаты в истории чата, потому сам prompt остаётся
-    // человеческим текстом, а lat/lon уходят в NATS envelope отдельно.
-    userMsg.statusNote = `lat=${extra["lat"]} lon=${extra["lon"]}`;
-  }
 
   let currentAgentMsgId = randomUUID();
   appendMessage(instanceId, {
