@@ -99,6 +99,7 @@ registry -> dry-stack deploy -> Swarm services -> Traefik -> browser.
 
 - `src/basic-controller.js` - запускает controller и пять persona agents.
 - `src/personas.js` - русские роли: `teacher`, `engineer`, `skeptic`, `manager`, `moderator`.
+- `src/youtrack-agent.js` - локальный read-only YouTrack agent `youtrack/monitorsoft/triage`.
 - `examples/agent-web-ui/` - перенесенный Synadia `examples/agent-web-ui` с локальными правками.
 - `plugins/basic-tools/` - OpenClaw command `/basic` и tool `basic_ask`.
 - `scripts/prepare-openclaw-nats-channel.js` - подключает официальный `@synadia-ai/nats-channel`.
@@ -182,6 +183,89 @@ npm run controller
 npm run monitor
 ```
 
+Локальный read-only YouTrack agent:
+
+```sh
+YOUTRACK_TOKEN=<permanent-token> npm run youtrack
+```
+
+Он регистрирует subject:
+
+```text
+agents.prompt.youtrack.monitorsoft.triage
+```
+
+Минимальный `yt.giscloud.ru` webhook/API-check agent:
+
+```sh
+YOUTRACK_BASE_URL=https://yt.giscloud.ru \
+YOUTRACK_OWNER=giscloud \
+YOUTRACK_AGENT_NAME=codex \
+YOUTRACK_TOKEN=<permanent-token> \
+npm run youtrack:codex
+```
+
+Он поднимает HTTP endpoints:
+
+```text
+GET  /healthz
+GET  /youtrack/api-check
+POST /youtrack/webhook
+GET  /youtrack/webhooks/last
+GET  /youtrack/agent-messages
+```
+
+И регистрирует subject:
+
+```text
+agents.prompt.youtrack.giscloud.codex
+```
+
+Webhook callback устроен так:
+
+```text
+YouTrack Webhook Triggers App
+  -> POST https://nats-synadia-dev.gis-master.ru/youtrack/webhook
+  -> Bun UI proxy внутри app container
+  -> http://127.0.0.1:3401/youtrack/webhook
+  -> NATS request youtrack.hooks.giscloud.codex
+  -> agent пишет сообщение в свой in-memory журнал
+  -> prompt "hooks" или GET /youtrack/agent-messages показывает эти сообщения
+```
+
+`/youtrack/webhook` возвращает `200` только после NATS callback ack от агента.
+Если callback subject не слушается или NATS недоступен, endpoint вернёт ошибку,
+чтобы это было видно в логах/ретраях YouTrack.
+
+Production URL для YouTrack:
+
+```text
+https://nats-synadia-dev.gis-master.ru/youtrack/webhook
+```
+
+Проверки после deploy:
+
+```sh
+curl --noproxy '*' https://nats-synadia-dev.gis-master.ru/youtrack/api-check
+curl --noproxy '*' https://nats-synadia-dev.gis-master.ru/youtrack/agent-messages
+```
+
+Локальный smoke webhook:
+
+```sh
+curl --noproxy '*' -X POST http://127.0.0.1:3401/youtrack/webhook \
+  -H 'content-type: application/json' \
+  --data '{"eventType":"issueUpdated","issue":{"idReadable":"TEST-1","summary":"Smoke"},"changedFields":[{"name":"State"}]}'
+```
+
+Проверить, что hook записался именно как сообщение агента:
+
+```sh
+curl --noproxy '*' http://127.0.0.1:3401/youtrack/agent-messages
+nats req agents.prompt.youtrack.giscloud.codex '{"prompt":"hooks"}' \
+  --wait-for-empty --reply-timeout=5s --timeout=15s --raw
+```
+
 UI в dev-режиме:
 
 ```sh
@@ -193,6 +277,20 @@ npm run ui:vite
 
 ```text
 http://localhost:5173
+```
+
+Если нужно проверить UI на конкретном NATS, можно передать его прямо в
+адресной строке. Этот параметр имеет приоритет над `--nats-url`,
+`NATS_CONNECTIONS_JSON`, `NATS_CONNECTIONS`, `NATS_URL` и локальным default:
+
+```text
+http://localhost:5173/?nats=nats%3A%2F%2F127.0.0.1%3A4222
+```
+
+Несколько servers одной NATS-шины передаются через запятую:
+
+```text
+http://localhost:5173/?nats=nats%3A%2F%2F127.0.0.1%3A4222,nats%3A%2F%2F127.0.0.1%3A4223
 ```
 
 Production-like режим:
@@ -229,8 +327,10 @@ NATS_SERVERS=nats://host:4222 npm run ui:bridge
 NATS_SERVICE_URL=nats://host:4222 npm run controller
 ```
 
-Приоритет настроек: `NATS_URL` -> `NATS_SERVERS` -> `NATS_SERVICE_URL` ->
-локальный default `nats://127.0.0.1:4222`. В production
+Приоритет настроек для обычных backend agents: `NATS_URL` -> `NATS_SERVERS`
+-> `NATS_SERVICE_URL` -> локальный default `nats://127.0.0.1:4222`.
+Для browser UI bridge самый высокий приоритет у адресной строки:
+`?nats=nats://host:4222`. В production
 `stack/nats-synadia-dev.drs` читает эти же env, поэтому GitLab/Swarm можно
 переключить на внешний NATS без изменения кода.
 
@@ -461,6 +561,38 @@ List personas:
 
 ```sh
 nats req agents.personas.basic.demo.control '{}'
+```
+
+YouTrack read-only agent:
+
+```sh
+nats req agents.prompt.youtrack.monitorsoft.triage \
+  '{"prompt":"ABC-123"}' \
+  --wait-for-empty --reply-timeout=30s --timeout=60s --raw
+```
+
+Поиск задач:
+
+```sh
+nats req agents.prompt.youtrack.monitorsoft.triage \
+  '{"prompt":"project: ABC unresolved"}' \
+  --wait-for-empty --reply-timeout=30s --timeout=60s --raw
+```
+
+YouTrack Codex agent health:
+
+```sh
+nats req agents.prompt.youtrack.giscloud.codex \
+  '{"prompt":"health"}' \
+  --wait-for-empty --reply-timeout=5s --timeout=15s --raw
+```
+
+Последние hook-сообщения, которые дошли до agent callback inbox:
+
+```sh
+nats req agents.prompt.youtrack.giscloud.codex \
+  '{"prompt":"hooks"}' \
+  --wait-for-empty --reply-timeout=5s --timeout=15s --raw
 ```
 
 Review через controller endpoint:

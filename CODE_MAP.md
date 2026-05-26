@@ -32,11 +32,29 @@
 - `src/monitor.js` - учебный NATS traffic monitor.
   Нужен, чтобы смотреть subjects и payload-ы во время экспериментов.
 
+- `src/youtrack-agent.js` - локальный read-only YouTrack agent.
+  Регистрирует `agents.prompt.youtrack.monitorsoft.triage`, читает задачи через
+  REST API и ничего не пишет обратно в YouTrack.
+
+- `src/youtrack-codex-agent.js` - минимальный `yt.giscloud.ru` webhook/API-check agent.
+  Регистрирует `agents.prompt.youtrack.giscloud.codex`, поднимает HTTP endpoints
+  `/youtrack/webhook`, `/youtrack/api-check`, `/youtrack/webhooks/last`,
+  `/youtrack/agent-messages` и проверяет, что YouTrack REST API доступен
+  напрямую по bearer token без внешнего auth barrier.
+  Callback flow: HTTP webhook делает NATS request в
+  `youtrack.hooks.giscloud.codex`, а subscription внутри agent process пишет
+  событие в `recentAgentMessages`; prompt `hooks` читает именно этот журнал.
+
 ## Web UI
 
 - `examples/agent-web-ui/server/index.ts` - Bun HTTP/WebSocket server.
   Раздаёт `dist/`, держит `/ws`, отдаёт `/healthz` для deploy-smoke.
-  NATS можно задать через `--nats-url`, `--servers`, `NATS_URL`, `NATS_SERVERS`, `NATS_SERVICE_URL`.
+  Публичные `/youtrack/*` proxy-ит в локальный `youtrack-codex-agent`
+  (`YOUTRACK_WEBHOOK_PROXY_TARGET`, default `http://127.0.0.1:3401`), потому
+  dry-stack ingress открыт на один browser-facing service port.
+  NATS можно задать через адресную строку `?nats=nats://host:4222`,
+  `--nats-url`, `--servers`, `NATS_URL`, `NATS_SERVERS`, `NATS_SERVICE_URL`.
+  Query-param имеет приоритет для конкретного browser WebSocket.
   Несколько независимых NATS задаются через `NATS_CONNECTIONS_JSON` или
   локальный короткий `NATS_CONNECTIONS=name=url;name2=url2`.
 
@@ -46,6 +64,10 @@
   NATS client, где найден agent.
   Для weather adapter-а принимает `extra.lat/lon` и вручную собирает NATS
   envelope, потому публичный `Agent.prompt()` SDK принимает только text/attachments.
+
+- `examples/agent-web-ui/src/composables/useBridge.ts` - browser WebSocket client.
+  Передаёт `window.location.search` в `/ws`, поэтому `?nats=...` из адресной
+  строки действительно доходит до Bun bridge.
 
 - `examples/agent-web-ui/server/wire.ts` - wire-contract между browser и Bun bridge.
   Здесь оставлен только текущий demo surface: discovery, prompt streaming,
@@ -104,6 +126,8 @@
 - `stack/nats-synadia-dev.drs` - dry-stack deployment:
   `nats` service + публичный `app` service на `nats-synadia-dev.gis-master.ru`.
   `NATS_URL` внутри stack-а можно переопределить env-ами `NATS_URL`/`NATS_SERVERS`/`NATS_SERVICE_URL`.
+  `app` запускает `youtrack-codex-agent` при `START_YOUTRACK_CODEX_AGENT=true`
+  и пробрасывает `YOUTRACK_TOKEN` из GitLab CI variables.
   `NATS_CONNECTIONS_JSON` и `NATS_CONNECTIONS` пробрасываются в UI для multi-NATS discovery.
   `NATS_EXTERNAL_NETWORK` дополнительно подключает `app` к уже существующей docker network,
   например `rag-stack_default` для NATS из `nats-agent-ruby`.

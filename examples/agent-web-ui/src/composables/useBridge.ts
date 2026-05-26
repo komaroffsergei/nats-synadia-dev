@@ -45,6 +45,14 @@ function connect(): void {
   if (ws) return;
   const url = new URL("/ws", window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  // UI может быть открыт как:
+  //
+  //   /?nats=nats://host1:4222,nats://host2:4222
+  //
+  // Браузер сам к NATS не подключается, поэтому этот query string нужно
+  // передать в Bun bridge WebSocket. Bridge уже откроет NATS client на сервере
+  // и отдаст discovery/prompt поток обратно в этот WebSocket.
+  url.search = window.location.search;
 
   bridgeState.status = "connecting";
   bridgeState.lastError = null;

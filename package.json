@@ -8,6 +8,8 @@
     "nats": "nats-server -c nats.conf",
     "monitor": "node src/monitor.js",
     "controller": "node src/basic-controller.js",
+    "youtrack": "node src/youtrack-agent.js",
+    "youtrack:codex": "node src/youtrack-codex-agent.js",
     "ui": "npm run ui:start",
     "ui:bridge": "cd examples/agent-web-ui && bun run dev",
     "ui:vite": "cd examples/agent-web-ui && bun run vite",

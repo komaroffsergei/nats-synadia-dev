@@ -82,6 +82,10 @@ export class Bridge {
   constructor(
     private readonly connections: BridgeConnection[],
     private readonly sdkProtocolVersion: string,
+    // Default connections live for the whole Bun process.
+    // Connections opened by `?nats=...` belong to one browser WebSocket only,
+    // so Bridge must close them when that WebSocket closes.
+    private readonly closeConnectionsOnClose = false,
   ) {}
 
   open(ws: ServerWebSocket<BridgeWsData>): void {
@@ -154,6 +158,25 @@ export class Bridge {
     this.lastHeartbeatAt.clear();
     this.pendingInstanceLookups.clear();
     this.ws = null;
+    if (this.closeConnectionsOnClose) void this.closeConnections();
+  }
+
+  private async closeConnections(): Promise<void> {
+    // Закрываем только те NATS clients, которые были созданы специально для
+    // этого Bridge. Общие env/CLI clients здесь не трогаются, иначе одна
+    // закрытая вкладка оборвёт discovery/prompt для всех остальных вкладок.
+    for (const connection of this.connections) {
+      try {
+        await connection.agents.close();
+      } catch (e) {
+        console.warn(`[bridge] agents.close() failed for ${connection.label}:`, (e as Error).message);
+      }
+      try {
+        await connection.nc.close();
+      } catch {
+        /* noop */
+      }
+    }
   }
 
   private async handleDiscover(): Promise<void> {

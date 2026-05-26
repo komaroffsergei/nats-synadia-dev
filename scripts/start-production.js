@@ -11,13 +11,18 @@ import { dirname, join } from "node:path";
 //   npm run ui
 //
 // В Docker/Swarm нам нужен один browser-facing container, поэтому здесь
-// аккуратно поднимаем один или два процесса рядом:
+// аккуратно поднимаем несколько процессов рядом:
 //
 // 1. `node src/basic-controller.js` (можно выключить START_BASIC_AGENTS=false)
 //    Создаёт controller/persona/group-session agents и подключается к NATS.
 //
-// 2. `bun run server/index.ts`
+// 2. `node src/youtrack-codex-agent.js` (START_YOUTRACK_CODEX_AGENT=true)
+//    Слушает локальный HTTP callback от UI proxy и регистрирует
+//    `agents.prompt.youtrack.giscloud.codex`.
+//
+// 3. `bun run server/index.ts`
 //    Раздаёт Vue UI из dist/ и держит WebSocket bridge `/ws`.
+//    Публичный `/youtrack/*` proxy-ит в локальный YouTrack agent на :3401.
 //
 // NATS остаётся отдельным service в `stack/nats-synadia-dev.drs`.
 // Это важно: NATS - транспортная шина, а app container - только demo agents + UI.
@@ -36,11 +41,24 @@ const port = process.env.PORT || "3300";
 const startBasicAgents = !["0", "false", "no", "off"].includes(
   String(process.env.START_BASIC_AGENTS || "true").toLowerCase(),
 );
+const startYouTrackCodexAgent = !["0", "false", "no", "off"].includes(
+  String(process.env.START_YOUTRACK_CODEX_AGENT || (process.env.YOUTRACK_TOKEN ? "true" : "false")).toLowerCase(),
+);
+const youtrackWebhookPort = process.env.YOUTRACK_WEBHOOK_PORT || "3401";
 
 const childEnv = {
   ...process.env,
   NATS_URL: natsUrl,
   PORT: port,
+  YOUTRACK_BASE_URL: process.env.YOUTRACK_BASE_URL || "https://yt.giscloud.ru",
+  YOUTRACK_OWNER: process.env.YOUTRACK_OWNER || "giscloud",
+  YOUTRACK_AGENT_NAME: process.env.YOUTRACK_AGENT_NAME || "codex",
+  YOUTRACK_WEBHOOK_HOST: process.env.YOUTRACK_WEBHOOK_HOST || "127.0.0.1",
+  YOUTRACK_WEBHOOK_PORT: youtrackWebhookPort,
+  YOUTRACK_WEBHOOK_PROXY_TARGET: process.env.YOUTRACK_WEBHOOK_PROXY_TARGET || `http://127.0.0.1:${youtrackWebhookPort}`,
+  YOUTRACK_PUBLIC_WEBHOOK_URL:
+    process.env.YOUTRACK_PUBLIC_WEBHOOK_URL ||
+    "https://nats-synadia-dev.gis-master.ru/youtrack/webhook",
 };
 
 const children = new Map();
@@ -182,6 +200,12 @@ if (startBasicAgents) {
   start("controller", "node", ["src/basic-controller.js"]);
 } else {
   console.log("[prod] START_BASIC_AGENTS=false, starting UI bridge only");
+}
+
+if (startYouTrackCodexAgent) {
+  start("youtrack-codex", "node", ["src/youtrack-codex-agent.js"]);
+} else {
+  console.log("[prod] START_YOUTRACK_CODEX_AGENT=false or YOUTRACK_TOKEN missing, skipping YouTrack Codex agent");
 }
 
 start("ui", "bun", ["run", "server/index.ts", "--host", process.env.HOST || "0.0.0.0", "--port", port], {

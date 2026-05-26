@@ -21,10 +21,11 @@ import {
   connect as natsConnect,
   type NodeConnectionOptions,
 } from "@nats-io/transport-node";
-import { parseConfig, type NatsConnectionConfig } from "./config.ts";
+import { parseConfig, parseUrlNatsOverride, type NatsConnectionConfig } from "./config.ts";
 import { Bridge, formatSdkProtocolVersion, type BridgeConnection, type BridgeWsData } from "./bridge.ts";
 
 const config = parseConfig(Bun.argv);
+let defaultConnectionsPromise: Promise<BridgeConnection[]> | null = null;
 
 async function buildConnectOptions(connection: NatsConnectionConfig): Promise<NodeConnectionOptions> {
   if (connection.servers) {
@@ -50,15 +51,81 @@ async function openBridgeConnection(connection: NatsConnectionConfig): Promise<B
   return { ...connection, nc, agents };
 }
 
-const natsConnections = await Promise.all(config.connections.map(openBridgeConnection));
-
 const distDir = join(import.meta.dir, "..", "dist");
 const sdkVersionString = formatSdkProtocolVersion(SDK_PROTOCOL_VERSION);
+const youtrackProxyTarget = (process.env["YOUTRACK_WEBHOOK_PROXY_TARGET"] || "http://127.0.0.1:3401").replace(/\/+$/, "");
+
+async function openConnections(connections: NatsConnectionConfig[]): Promise<BridgeConnection[]> {
+  return Promise.all(connections.map(openBridgeConnection));
+}
+
+function getDefaultConnections(): Promise<BridgeConnection[]> {
+  // Env/CLI/default подключения шарятся между всеми браузерными WebSocket-ами.
+  // Это обычный режим работы UI: один Bun process держит один набор NATS
+  // clients, а каждое окно браузера получает только свой Bridge state.
+  defaultConnectionsPromise ??= openConnections(config.connections);
+  return defaultConnectionsPromise;
+}
+
+async function openRequestConnections(url: URL): Promise<{ connections: BridgeConnection[]; closeWithBridge: boolean }> {
+  const natsOverride = url.searchParams.get("nats");
+  if (natsOverride !== null) {
+    // URL override намеренно НЕ шарится между пользователями:
+    // конкретная вкладка могла быть открыта для временной проверки чужого NATS.
+    // Поэтому создаём отдельный NATS client и закрываем его вместе с WebSocket.
+    return {
+      connections: await openConnections(parseUrlNatsOverride(natsOverride)),
+      closeWithBridge: true,
+    };
+  }
+
+  return {
+    connections: await getDefaultConnections(),
+    closeWithBridge: false,
+  };
+}
+
+async function closeConnections(connections: BridgeConnection[]): Promise<void> {
+  for (const connection of connections) {
+    try {
+      await connection.agents.close();
+    } catch (e) {
+      console.warn(`[testui] agents.close() failed for ${connection.label}:`, (e as Error).message);
+    }
+    try {
+      await connection.nc.close();
+    } catch {
+      /* noop */
+    }
+  }
+}
 
 function redactNatsUrl(value: string): string {
   // NATS URLs can carry token or user:password before `@`.
   // Health checks and logs should show the endpoint, not secret material.
   return value.replace(/((?:nats|tls|ws|wss)(?:\+[^:]+)?:\/\/)([^@,\/]+)@/g, "$1<redacted>@");
+}
+
+async function proxyYouTrackRequest(req: Request, url: URL): Promise<Response> {
+  // Production ingress у stack-а открыт только на публичный UI service port 3300.
+  // Сам YouTrack Codex agent слушает локальный HTTP port 3401 внутри того же
+  // container-а, поэтому публичные `/youtrack/*` запросы прокидываем отсюда.
+  //
+  // Это даёт один внешний URL для YouTrack Webhook Triggers App:
+  //   https://nats-synadia-dev.gis-master.ru/youtrack/webhook
+  //
+  // А локальный agent остаётся недоступен напрямую извне.
+  const targetUrl = new URL(`${youtrackProxyTarget}${url.pathname}${url.search}`);
+  const headers = new Headers(req.headers);
+  headers.set("x-forwarded-host", url.host);
+  headers.set("x-forwarded-proto", url.protocol.replace(":", ""));
+
+  return fetch(targetUrl, {
+    method: req.method,
+    headers,
+    body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
+    redirect: "manual",
+  });
 }
 
 const server = Bun.serve<BridgeWsData>({
@@ -67,8 +134,28 @@ const server = Bun.serve<BridgeWsData>({
   async fetch(req, srv) {
     const url = new URL(req.url);
 
+    if (url.pathname.startsWith("/youtrack/")) {
+      return proxyYouTrackRequest(req, url);
+    }
+
     if (url.pathname === "/healthz") {
-      return Response.json({
+      let opened: Awaited<ReturnType<typeof openRequestConnections>>;
+      try {
+        // `/healthz?nats=...` использует тот же resolver, что и `/ws?nats=...`.
+        // Так можно проверить приоритет адресной строки без открытия браузера.
+        opened = await openRequestConnections(url);
+      } catch (error) {
+        return Response.json(
+          {
+            ok: false,
+            service: "synadia-nats-agents-web-ui",
+            error: (error as Error).message,
+          },
+          { status: 503 },
+        );
+      }
+      const natsConnections = opened.connections;
+      const body = {
         ok: true,
         service: "synadia-nats-agents-web-ui",
         nats: {
@@ -83,13 +170,34 @@ const server = Bun.serve<BridgeWsData>({
           })),
         },
         sdkProtocolVersion: sdkVersionString,
+      };
+      if (opened.closeWithBridge) await closeConnections(natsConnections);
+      return Response.json({
+        ...body,
       });
     }
 
     if (url.pathname === "/ws") {
-      const bridge = new Bridge(natsConnections, sdkVersionString);
+      let opened: Awaited<ReturnType<typeof openRequestConnections>>;
+      try {
+        // Главный switch приоритета NATS для UI:
+        // - есть `?nats=...` -> подключаемся туда;
+        // - нет query-param -> используем CLI/env/default из parseConfig().
+        opened = await openRequestConnections(url);
+      } catch (error) {
+        return Response.json(
+          {
+            ok: false,
+            error: "nats_connect_failed",
+            message: (error as Error).message,
+          },
+          { status: 502 },
+        );
+      }
+      const bridge = new Bridge(opened.connections, sdkVersionString, opened.closeWithBridge);
       const upgraded = srv.upgrade(req, { data: { bridge } });
       if (upgraded) return undefined;
+      bridge.close();
       return new Response("expected WebSocket upgrade on /ws", { status: 400 });
     }
 
@@ -150,18 +258,8 @@ async function shutdown(sig: NodeJS.Signals): Promise<void> {
   } catch {
     /* noop */
   }
-  for (const connection of natsConnections) {
-    try {
-      await connection.agents.close();
-    } catch (e) {
-      console.warn(`[testui] agents.close() failed for ${connection.label}:`, (e as Error).message);
-    }
-    try {
-      await connection.nc.close();
-    } catch {
-      /* noop */
-    }
-  }
+  const defaultConnections = defaultConnectionsPromise ? await defaultConnectionsPromise.catch(() => []) : [];
+  await closeConnections(defaultConnections);
   process.exit(0);
 }
 

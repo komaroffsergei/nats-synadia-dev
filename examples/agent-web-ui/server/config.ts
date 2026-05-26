@@ -25,6 +25,28 @@ export type ServerConfig = {
   dev: boolean;
 };
 
+export function parseUrlNatsOverride(raw: string): NatsConnectionConfig[] {
+  // Этот parser обслуживает только browser override из адресной строки:
+  //
+  //   http://localhost:5173/?nats=nats://host1:4222,nats://host2:4222
+  //
+  // Здесь запятая остаётся внутри одного `servers` значения. Это важно:
+  // `parseNatsUrl()` из SDK понимает comma-separated server list как failover
+  // одного NATS cluster-а. Если когда-нибудь понадобится несколько независимых
+  // шин из URL, для этого лучше добавить отдельный query-param, а не менять
+  // смысл `nats=`.
+  const value = raw.trim();
+  if (!value) throw new Error("nats query parameter must not be empty");
+
+  return [
+    {
+      id: "url",
+      label: "url",
+      servers: value,
+    },
+  ];
+}
+
 export function parseConfig(argv: string[]): ServerConfig {
   // `Bun.argv` starts with ["bun", "server/index.ts", ...]; normalize to args only.
   const args = argv.slice(argv.findIndex((a) => a.endsWith("index.ts")) + 1);
