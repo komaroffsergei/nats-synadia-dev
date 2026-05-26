@@ -75,7 +75,7 @@ if [ "${DEPLOY_LOCAL_IMAGE:-false}" = "true" ]; then
   APP_IMAGE="${APP_IMAGE:-nats-synadia-dev:${CI_COMMIT_SHORT_SHA:-local}}"
   export APP_IMAGE
   echo "[deploy] building local app image ${APP_IMAGE}"
-  docker build -f /repo/docker/Dockerfile -t "${APP_IMAGE}" /repo
+  docker build -f /build/docker/Dockerfile -t "${APP_IMAGE}" /build
   echo "[deploy] loading ${APP_IMAGE} into ${DEPLOY_CONTEXT_ENDPOINT}"
   docker save "${APP_IMAGE}" | docker -H "${DEPLOY_CONTEXT_ENDPOINT}" load
 fi

@@ -9,5 +9,6 @@ WORKDIR /build
 RUN mkdir -p /root/.ssh && mkdir -pv /root/.ssh/sockets
 RUN printf 'Host *\n\tControlPersist yes\n\tControlMaster auto\n\tControlPath  /root/.ssh/sockets/%%r@%%h-%%p\n\tBatchMode yes\n\tStrictHostKeyChecking no\n\tServerAliveInterval 15\n\tServerAliveCountMax 3\n\tConnectionAttempts 3\n\tPort 22\n' > /root/.ssh/config
 ADD . .
+WORKDIR /build/stack
 
-CMD ["sh", "/build/deploy.sh"]
+CMD ["sh", "/build/stack/deploy.sh"]
