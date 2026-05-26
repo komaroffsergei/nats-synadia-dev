@@ -60,6 +60,7 @@ async function main() {
       msg.ack();
     } catch (error) {
       console.error(`[codex:worker] job failed: ${formatError(error)}`);
+      let failurePublished = false;
       try {
         const job = safeMsgJson(msg);
         if (job?.issueId) {
@@ -71,11 +72,13 @@ async function main() {
             error: formatError(error),
             failedAt: nowIso(),
           });
+          failurePublished = true;
         }
       } catch (publishError) {
         console.error(`[codex:worker] failed to publish failure result: ${formatError(publishError)}`);
       }
-      msg.nak(30_000);
+      if (failurePublished) msg.ack();
+      else msg.nak(30_000);
     } finally {
       if (heartbeat) clearInterval(heartbeat);
     }
