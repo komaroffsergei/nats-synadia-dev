@@ -64,11 +64,11 @@ if ! ssh-add -l; then
   exit 1
 fi
 
-REGISTRY_HOST="${REGISTRY_HOST:-ghcr.io}"
+REGISTRY_HOST="${REGISTRY_HOST:-builder-registry.builder.giscloud.ru}"
 REGISTRY_USER="${REGISTRY_USER:-${GHCR_USER:-}}"
 REGISTRY_PASSWORD="${REGISTRY_PASSWORD:-${GHCR_TOKEN:-}}"
 if [ -n "${REGISTRY_USER}" ] && [ -n "${REGISTRY_PASSWORD}" ]; then
-  printf '%s' "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_HOST}" -u "${REGISTRY_USER}" --password-stdin >/dev/null
+  printf '%s' "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_HOST}" -u "${REGISTRY_USER}" --password-stdin >/dev/null || true
 fi
 
 i=0
