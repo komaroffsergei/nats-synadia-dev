@@ -71,10 +71,19 @@ if [ -n "${REGISTRY_USER}" ] && [ -n "${REGISTRY_PASSWORD}" ]; then
   printf '%s' "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_HOST}" -u "${REGISTRY_USER}" --password-stdin >/dev/null || true
 fi
 
+if [ "${DEPLOY_LOCAL_IMAGE:-false}" = "true" ]; then
+  APP_IMAGE="${APP_IMAGE:-nats-synadia-dev:${CI_COMMIT_SHORT_SHA:-local}}"
+  export APP_IMAGE
+  echo "[deploy] building local app image ${APP_IMAGE}"
+  docker build -f /repo/docker/Dockerfile -t "${APP_IMAGE}" /repo
+  echo "[deploy] loading ${APP_IMAGE} into ${DEPLOY_CONTEXT_ENDPOINT}"
+  docker save "${APP_IMAGE}" | docker -H "${DEPLOY_CONTEXT_ENDPOINT}" load
+fi
+
 i=0
 until [ "$i" -ge 5 ]; do
   echo "[deploy] dry-stack endpoint ${DEPLOY_CONTEXT_ENDPOINT} (attempt $((i + 1))/5)"
-  if cat nats-synadia-dev.drs | dry-stack swarm_deploy --tls-domain=gis-master.ru -x "${DEPLOY_CONTEXT_ENDPOINT}" -- --prune --with-registry-auth; then
+  if cat nats-synadia-dev.drs | dry-stack swarm_deploy --tls-domain=gis-master.ru -x "${DEPLOY_CONTEXT_ENDPOINT}" -- --prune --with-registry-auth --resolve-image never; then
     exit 0
   fi
 

@@ -28,8 +28,8 @@ digraph G {
   ];
 
   repo [label="GitLab repo\ntrizna/nats-synadia-dev", fillcolor="#dbeafe"];
-  build [label="CI build push\nbuild-labels + Docker buildx", fillcolor="#e0f2fe"];
-  registry [label="builder-registry\ntrizna/nats-synadia-dev/app/main", fillcolor="#ecfeff"];
+  build [label="CI build\nbuild-labels + Docker buildx", fillcolor="#e0f2fe"];
+  registry [label="docker save/load\nssh://gis-master.ru", fillcolor="#ecfeff"];
   deploy [label="CI deploy\ndry-stack swarm_deploy", fillcolor="#f3e8ff"];
   swarm [label="Docker Swarm\ngis-master.ru", fillcolor="#dcfce7"];
   nats [label="Service: nats\nnats:2.11.6-scratch", fillcolor="#dcfce7"];
@@ -38,10 +38,10 @@ digraph G {
   user [label="Browser\nhttps://nats-synadia-dev.gis-master.ru", fillcolor="#dbeafe"];
 
   repo -> build [label="push to master"];
-  build -> registry [label="push image"];
+  build -> registry [label="load image"];
   repo -> deploy [label="stack/*.drs"];
   deploy -> swarm [label="ssh://gis-master.ru"];
-  registry -> app [label="pull image"];
+  registry -> app [label="local image"];
   swarm -> nats [label="internal NATS"];
   swarm -> app [label="run app"];
   app -> nats [label="NATS_URL"];

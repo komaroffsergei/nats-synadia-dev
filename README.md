@@ -74,11 +74,12 @@ process внутри `groupSessions`.
 ### Публикация на gis-master.ru
 
 Описание: схема показывает production path публикации проекта. После push в
-GitLab runner собирает Docker image, отправляет его в registry, а deploy job
-через `dry-stack swarm_deploy` обновляет stack на `gis-master.ru`.
+GitLab runner собирает Docker image без push в registry, а deploy job загружает
+image напрямую в Docker daemon `gis-master.ru` и через
+`dry-stack swarm_deploy --resolve-image never` обновляет stack.
 
 Как читать: слева направо показан путь артефакта: GitLab repo -> CI build ->
-registry -> dry-stack deploy -> Swarm services -> Traefik -> browser.
+local image load -> dry-stack deploy -> Swarm services -> Traefik -> browser.
 
 Где смотреть код: `.gitlab-ci.yml`, `docker/Dockerfile`,
 `docker/build-images.sh`, `stack/nats-synadia-dev.drs`, `stack/deploy.sh`.
@@ -688,7 +689,7 @@ push to GitLab
   -> .gitlab-ci.yml
   -> docker/Dockerfile.build
   -> build-labels + docker buildx
-  -> builder-registry.builder.giscloud.ru/trizna/nats-synadia-dev/app/main
+  -> docker save/load через ssh://gis-master.ru
   -> stack/Dockerfile.deploy
   -> dry-stack swarm_deploy
   -> https://nats-synadia-dev.gis-master.ru
