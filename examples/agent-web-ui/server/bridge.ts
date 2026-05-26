@@ -52,12 +52,19 @@ type NatsStreamMsg = {
   headers?: { has?: (key: string) => boolean; get?: (key: string) => string | null };
 };
 type StoppableAsyncIterable<T> = AsyncIterable<T> & { stop(): void };
+type StoppableSubscription<T> = AsyncIterable<T> & { stop?: () => void; unsubscribe?: () => void };
 type DecodedQueryLike = {
   type: "query";
   id: string;
   replySubject: string;
   prompt: string;
   attachments?: { filename: string; content: string }[];
+};
+type YouTrackAgentMessage = {
+  id: string;
+  text: string;
+  receivedAt: string;
+  promptSubject?: string;
 };
 
 export type BridgeWsData = { bridge: Bridge };
@@ -70,6 +77,7 @@ export class Bridge {
   private heartbeatSubs = new Map<string, () => void>();
   private heartbeatTrackers = new Map<string, HeartbeatTracker>();
   private heartbeatWatchUnsubs = new Map<string, () => void>();
+  private youtrackMessageUnsubs = new Map<string, () => void>();
   private pendingInstanceLookups = new Set<string>();
   private lastHeartbeatAt = new Map<string, { atMs: number; intervalS: number }>();
   private staleSweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -99,6 +107,7 @@ export class Bridge {
       ...(natsServer ? { natsServer } : {}),
     });
     this.startHeartbeatWatch();
+    this.startYouTrackMessageWatch();
     this.startStaleSweep();
   }
 
@@ -151,6 +160,8 @@ export class Bridge {
     this.heartbeatSubs.clear();
     for (const unsub of this.heartbeatWatchUnsubs.values()) unsub();
     this.heartbeatWatchUnsubs.clear();
+    for (const unsub of this.youtrackMessageUnsubs.values()) unsub();
+    this.youtrackMessageUnsubs.clear();
     for (const tracker of this.heartbeatTrackers.values()) void tracker.stop();
     this.heartbeatTrackers.clear();
     if (this.staleSweepTimer) clearInterval(this.staleSweepTimer);
@@ -558,6 +569,76 @@ export class Bridge {
     }
   }
 
+  private startYouTrackMessageWatch(): void {
+    const subject = youtrackAgentMessageSubject();
+    if (!subject) return;
+
+    for (const connection of this.connections) {
+      if (this.youtrackMessageUnsubs.has(connection.id)) continue;
+
+      // Это browser-facing подписка на broadcast, который публикует
+      // `src/youtrack-codex-agent.js` после обработки webhook-а. Она не
+      // отвечает в NATS и не участвует в request/reply ack-е webhook endpoint-а:
+      // задача только протолкнуть уже принятое агентом сообщение в открытый UI.
+      const sub = connection.nc.subscribe(subject) as StoppableSubscription<NatsStreamMsg>;
+      this.youtrackMessageUnsubs.set(connection.id, () => {
+        if (typeof sub.stop === "function") sub.stop();
+        else sub.unsubscribe?.();
+      });
+
+      void (async () => {
+        for await (const msg of sub) {
+          if (this.closed) break;
+          await this.forwardYouTrackAgentMessage(connection, msg.data);
+        }
+      })().catch((e) => {
+        if (!this.closed) {
+          console.warn(`[bridge] YouTrack message watch failed on ${connection.label}:`, (e as Error).message);
+        }
+      });
+    }
+  }
+
+  private async forwardYouTrackAgentMessage(connection: BridgeConnection, data: Uint8Array): Promise<void> {
+    const message = decodeYouTrackAgentMessage(data);
+    if (!message) return;
+
+    let instanceId = this.findYouTrackAgentInstanceId(connection, message.promptSubject);
+    if (!instanceId) {
+      // Если событие пришло раньше первого discovery/heartbeat, пробуем
+      // синхронно обновить список агентов и найти YouTrack ещё раз.
+      await this.handleDiscover();
+      instanceId = this.findYouTrackAgentInstanceId(connection, message.promptSubject);
+    }
+    if (!instanceId) {
+      console.warn(`[bridge] YouTrack message received but no YouTrack agent is known on ${connection.label}`);
+      return;
+    }
+
+    this.send({
+      kind: "agent-message",
+      id: message.id,
+      instanceId,
+      text: message.text,
+      timestamp: message.receivedAt,
+      title: "YouTrack webhook",
+      autoOpen: true,
+    });
+  }
+
+  private findYouTrackAgentInstanceId(connection: BridgeConnection, promptSubject?: string): string | null {
+    if (promptSubject) {
+      for (const [instanceId, ref] of this.agentsByInstanceId) {
+        if (ref.connection.id === connection.id && ref.agent.promptEndpoint.subject === promptSubject) return instanceId;
+      }
+    }
+
+    for (const [instanceId, ref] of this.agentsByInstanceId) {
+      if (ref.connection.id === connection.id && ref.agent.agent === "youtrack") return instanceId;
+    }
+    return null;
+  }
+
   private startStaleSweep(): void {
     if (this.staleSweepTimer) return;
     this.staleSweepTimer = setInterval(() => this.evictStaleAgents(), Bridge.STALE_SWEEP_INTERVAL_MS);
@@ -812,6 +893,52 @@ function safeParse<T>(text: string): T | null {
   } catch {
     return null;
   }
+}
+
+function youtrackAgentMessageSubject(): string {
+  const owner = process.env["YOUTRACK_OWNER"] || "giscloud";
+  const name = process.env["YOUTRACK_AGENT_NAME"] || "codex";
+  return process.env["YOUTRACK_AGENT_MESSAGE_SUBJECT"] || `youtrack.messages.${owner}.${name}`;
+}
+
+function decodeYouTrackAgentMessage(data: Uint8Array): YouTrackAgentMessage | null {
+  const decoded = safeParse<Record<string, unknown>>(new TextDecoder().decode(data));
+  if (!decoded) return null;
+
+  const message = recordValue(decoded["message"]);
+  if (!message) return null;
+
+  const text = stringValue(message["text"]).trim();
+  if (!text) return null;
+
+  const receivedAt = stringValue(message["receivedAt"]) || new Date().toISOString();
+  const sourceReceivedAt = stringValue(message["sourceReceivedAt"]);
+  const promptSubject = stringValue(decoded["promptSubject"]);
+  const idSource = sourceReceivedAt || receivedAt;
+
+  return {
+    id: `youtrack-${idSource}-${hashText(text)}`,
+    text,
+    receivedAt,
+    ...(promptSubject ? { promptSubject } : {}),
+  };
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function hashText(text: string): string {
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(16);
 }
 
 function wireInstanceId(connection: BridgeConnection, rawInstanceId: string): string {

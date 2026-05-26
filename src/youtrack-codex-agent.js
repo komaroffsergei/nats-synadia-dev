@@ -40,6 +40,8 @@ const PUBLIC_WEBHOOK_URL = env("YOUTRACK_PUBLIC_WEBHOOK_URL", "");
 const MAX_WEBHOOK_BYTES = Number(env("YOUTRACK_WEBHOOK_MAX_BYTES", "1048576"));
 const MAX_EVENTS = Number(env("YOUTRACK_WEBHOOK_MAX_EVENTS", "50"));
 const HOOK_CALLBACK_SUBJECT = env("YOUTRACK_HOOK_CALLBACK_SUBJECT", `youtrack.hooks.${YOUTRACK_OWNER}.${YOUTRACK_NAME}`);
+const AGENT_MESSAGE_SUBJECT = env("YOUTRACK_AGENT_MESSAGE_SUBJECT", `youtrack.messages.${YOUTRACK_OWNER}.${YOUTRACK_NAME}`);
+const PROMPT_SUBJECT = `agents.prompt.${YOUTRACK_AGENT}.${YOUTRACK_OWNER}.${YOUTRACK_NAME}`;
 const HOOK_CALLBACK_TIMEOUT_MS = Number(env("YOUTRACK_HOOK_CALLBACK_TIMEOUT_MS", "3000"));
 
 // `recentWebhookEvents` - сырые нормализованные HTTP события.
@@ -280,6 +282,28 @@ function webhookEventToAgentMessage(event) {
   };
 }
 
+async function publishAgentMessage(nc, message) {
+  // Это fan-out событие для UI bridge.
+  //
+  // Callback subject (`youtrack.hooks...`) остаётся request/reply inbox-ом:
+  // HTTP handler ждёт ack и понимает, что агент событие обработал. А этот
+  // subject (`youtrack.messages...`) - обычная broadcast-лента для открытых
+  // браузерных чатов. Bridge слушает её и сразу рисует bubble без ручного
+  // prompt-а `hooks`.
+  nc.publish(AGENT_MESSAGE_SUBJECT, encodeJson({
+    type: "youtrack.agent_message",
+    promptSubject: PROMPT_SUBJECT,
+    agent: {
+      agent: YOUTRACK_AGENT,
+      owner: YOUTRACK_OWNER,
+      name: YOUTRACK_NAME,
+      promptSubject: PROMPT_SUBJECT,
+    },
+    message,
+  }));
+  await nc.flush();
+}
+
 function fallbackCallbackEvent(envelope) {
   // Если callback subject кто-то вызвал руками и прислал не наш envelope
   // `{ type, event }`, агент всё равно должен записать понятное сообщение,
@@ -320,12 +344,14 @@ function startHookCallbackConsumer(nc) {
         ? envelope.event
         : fallbackCallbackEvent(envelope);
       const message = rememberAgentMessage(webhookEventToAgentMessage(event));
+      await publishAgentMessage(nc, message);
 
       if (msg.reply) {
         nc.publish(msg.reply, encodeJson({
           ok: true,
           receivedAt: message.receivedAt,
           storedMessages: recentAgentMessages.length,
+          agentMessageSubject: AGENT_MESSAGE_SUBJECT,
         }));
       }
     }
@@ -403,6 +429,7 @@ async function handleHttp(req) {
           publicUrl: PUBLIC_WEBHOOK_URL || null,
           tokenRequired: Boolean(WEBHOOK_TOKEN),
           callbackSubject: HOOK_CALLBACK_SUBJECT,
+          agentMessageSubject: AGENT_MESSAGE_SUBJECT,
           receivedEvents: recentWebhookEvents.length,
           agentMessages: recentAgentMessages.length,
         },
@@ -524,6 +551,7 @@ async function main() {
 
   console.log(`[youtrack:codex] ${service.subject.prompt}`);
   console.log(`[youtrack:codex] hook callback subject=${HOOK_CALLBACK_SUBJECT}`);
+  console.log(`[youtrack:codex] agent message subject=${AGENT_MESSAGE_SUBJECT}`);
   console.log(`[youtrack:codex] http=http://${WEBHOOK_HOST}:${WEBHOOK_PORT}`);
   console.log(`[youtrack:codex] base=${YOUTRACK_BASE_URL} token=${YOUTRACK_TOKEN ? "set" : "missing"}`);
 

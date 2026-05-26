@@ -59,6 +59,7 @@ const childEnv = {
   YOUTRACK_PUBLIC_WEBHOOK_URL:
     process.env.YOUTRACK_PUBLIC_WEBHOOK_URL ||
     "https://nats-synadia-dev.gis-master.ru/youtrack/webhook",
+  YOUTRACK_AGENT_MESSAGE_SUBJECT: process.env.YOUTRACK_AGENT_MESSAGE_SUBJECT || "youtrack.messages.giscloud.codex",
 };
 
 const children = new Map();

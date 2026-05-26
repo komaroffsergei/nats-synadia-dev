@@ -43,7 +43,9 @@
   напрямую по bearer token без внешнего auth barrier.
   Callback flow: HTTP webhook делает NATS request в
   `youtrack.hooks.giscloud.codex`, а subscription внутри agent process пишет
-  событие в `recentAgentMessages`; prompt `hooks` читает именно этот журнал.
+  событие в `recentAgentMessages`; затем agent публикует
+  `youtrack.messages.giscloud.codex`, чтобы открытый Web UI сразу добавил
+  сообщение в чат YouTrack-агента. Prompt `hooks` читает тот же журнал.
 
 ## Web UI
 

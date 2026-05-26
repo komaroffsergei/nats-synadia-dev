@@ -4,7 +4,8 @@
 // stream handler map, one pending control-request map.
 
 import { bridgeState } from "../stores/bridge.ts";
-import { addAgent, removeAgent, setAgents } from "../stores/agents.ts";
+import { addAgent, removeAgent, selectAgent, setAgents } from "../stores/agents.ts";
+import { appendMessage } from "../stores/chat.ts";
 import { recordHeartbeat } from "../stores/heartbeats.ts";
 import { randomUUID } from "../uuid.ts";
 import type {
@@ -143,6 +144,17 @@ function handleServerMessage(msg: ServerMessage): void {
     case "heartbeat":
       recordHeartbeat(msg.instanceId);
       break;
+    case "agent-message":
+      appendMessage(msg.instanceId, {
+        id: msg.id || randomUUID(),
+        role: "agent",
+        content: msg.text,
+        streaming: false,
+        timestamp: timestampMs(msg.timestamp),
+        statusNote: msg.title,
+      });
+      if (msg.autoOpen) selectAgent(msg.instanceId);
+      break;
     case "agent-added":
       addAgent(msg.agent);
       break;
@@ -173,6 +185,11 @@ function handleServerMessage(msg: ServerMessage): void {
       }
       break;
   }
+}
+
+function timestampMs(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
 function resolveControl(id: string, value: unknown): void {

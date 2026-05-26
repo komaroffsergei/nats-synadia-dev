@@ -231,6 +231,8 @@ YouTrack Webhook Triggers App
   -> http://127.0.0.1:3401/youtrack/webhook
   -> NATS request youtrack.hooks.giscloud.codex
   -> agent пишет сообщение в свой in-memory журнал
+  -> agent публикует broadcast youtrack.messages.giscloud.codex
+  -> открытый Web UI сразу добавляет bubble в чат YouTrack-агента
   -> prompt "hooks" или GET /youtrack/agent-messages показывает эти сообщения
 ```
 

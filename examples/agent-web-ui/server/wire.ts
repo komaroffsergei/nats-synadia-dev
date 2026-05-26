@@ -143,6 +143,15 @@ export type ServerMessage =
       intervalS: number;
     }
   | {
+      kind: "agent-message";
+      id: string;
+      instanceId: string;
+      text: string;
+      timestamp: string;
+      title?: string;
+      autoOpen?: boolean;
+    }
+  | {
       kind: "error";
       id: string | null;
       code?: string | number;
