@@ -250,6 +250,10 @@ function rememberWebhookEvent(req, payload) {
     userAgent: req.headers["user-agent"] || "",
     youtrackEvent: req.headers["x-youtrack-event"] || "",
     summary: safeWebhookSummary(payload),
+    // Храним полный JSON body от YouTrack, а не только краткий summary. Именно
+    // этот объект попадает в chat bubble, чтобы при создании/редактировании
+    // задачи было видно все поля webhook-а без дополнительного GET запроса.
+    payload,
   };
   recentWebhookEvents.unshift(event);
   const maxEvents = Number.isFinite(MAX_EVENTS) && MAX_EVENTS > 0 ? MAX_EVENTS : 50;
@@ -273,11 +277,19 @@ function webhookEventToAgentMessage(event) {
   const changes = Array.isArray(event.summary.changes) && event.summary.changes.length
     ? ` fields=${event.summary.changes.join(",")}`
     : "";
+  const title = `YouTrack hook${type}${issue}${changes}`.trim();
   return {
     receivedAt: new Date().toISOString(),
     kind: "youtrack_hook",
     sourceReceivedAt: event.receivedAt,
-    text: `YouTrack hook${type}${issue}${changes}`.trim(),
+    title,
+    text: [
+      title,
+      "",
+      "````json",
+      JSON.stringify(event, null, 2),
+      "````",
+    ].join("\n"),
     event,
   };
 }
@@ -487,7 +499,7 @@ function formatHooksForPrompt() {
       const issue = message.event.summary.issue?.idReadable ? ` issue=${message.event.summary.issue.idReadable}` : "";
       const type = message.event.summary.eventType ? ` type=${message.event.summary.eventType}` : "";
       const keys = message.event.summary.keys.join(",");
-      return `- ${message.receivedAt}${type}${issue} text="${message.text}" keys=${keys}`;
+      return `- ${message.receivedAt}${type}${issue} text="${message.title || message.text}" keys=${keys}`;
     })
     .join("\n");
 }
