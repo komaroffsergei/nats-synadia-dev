@@ -1,124 +1,124 @@
-# Codex automation pattern
+# Как Worker Запускает Codex
 
-Документ фиксирует решение для YouTrack/NATS automation: как запускать Codex из
-worker-а и где уместен `codex exec --json` через локальный wrapper.
+Этот документ дополняет [README](../README.md) и
+[карту кода](../CODE_MAP.md). Он отвечает только на один вопрос: почему
+production worker использует `@openai/codex-sdk` и как ограничивается его
+окружение.
 
-## Решение
+## Короткое Решение
 
-Для постоянного NATS worker-а используем `@openai/codex-sdk`.
+Для постоянного NATS/JetStream worker-а используется `@openai/codex-sdk`.
 
-`codex exec --json` через `acodex` оставляем как отладочный, fallback и
-one-shot интерфейс. Он полезен для ручной проверки и CI, но не должен быть
-основным control plane для долгоживущего worker-а.
+`codex exec --json` через локальный wrapper остается полезным для ручной
+диагностики и аварийного one-shot запуска, но не является основным control
+plane для долгоживущего service-а.
 
-Причина: SDK лучше соответствует модели сервиса. Worker уже живет в Node.js,
-читает NATS/JetStream, публикует результаты и должен уметь стримить события,
-отменять turn, продолжать thread и ограничивать окружение дочернего процесса.
+Причина простая: worker уже живет в Node.js, читает JetStream, должен уметь
+продолжать thread, стримить события, отменять turn и явно контролировать env
+дочернего процесса. SDK лучше подходит для этой формы.
 
-Важно: SDK не является отдельным удаленным API. Локальный `@openai/codex-sdk`
-оборачивает Codex CLI, запускает его как дочерний процесс и общается с ним через
-JSONL по `stdin`/`stdout`. Поэтому требования к auth, `CODEX_HOME`, sandbox,
-рабочему каталогу и установленному Codex остаются актуальными.
+## Важная Деталь Про SDK
 
-## Сравнение
+`@openai/codex-sdk` не заменяет локальный Codex CLI отдельным удаленным API.
+SDK запускает Codex как дочерний процесс и общается с ним через JSONL.
 
-| Подход | Где использовать | Преимущества | Недостатки |
-| --- | --- | --- | --- |
-| `codex exec --json` через `acodex` | Ручная проверка, CI, cron, простой one-shot webhook, аварийный fallback | Минимальная интеграция, легко повторить из shell, отдельный процесс на каждый запуск, wrapper централизует CA/proxy | Нужно самому парсить JSONL, stderr и exit code; сложнее cancellation/resume; выше риск ошибок quoting; холодный старт на каждый запрос |
-| `@openai/codex-sdk` | Долгоживущий NATS/JetStream worker | Typed events, `runStreamed()`, `AbortSignal`, thread/resume, structured output, явное управление env и working directory | Все равно зависит от CLI; нужно управлять concurrency, timeout и cleanup; при низкоуровневых сбоях иногда проще смотреть raw `codex exec --json` |
-| `app-server`/daemon | Интерактивный remote control, websocket/JSON-RPC управление Codex | Долгоживущий server surface | Требует installer-managed standalone Codex по фиксированному пути; это отдельный режим, не замена worker-а |
+Поэтому остаются важными:
 
-## Практическое правило
+- auth через `OPENAI_API_KEY` или `CODEX_API_KEY`;
+- доступность Codex CLI в окружении;
+- `CODEX_HOME`, proxy/CA и другие настройки рабочего места;
+- `workingDirectory`;
+- sandbox и approval policy.
 
-1. Production worker вызывает Codex через `@openai/codex-sdk`.
-2. Worker публикует в NATS только нормализованные события и итоговый результат.
-3. `acodex exec --json` используется для диагностики тем же prompt-ом, который
-   worker отправляет через SDK.
-4. Если нужен CA/proxy wrapper, сначала предпочитаем явный `env` в SDK. Wrapper
-   подключаем через `codexPathOverride` только осознанно и после локальной
-   проверки.
-5. Для YouTrack задач sandbox по умолчанию должен быть read-only, approval -
-   `never`, network - выключен, если анализу не нужны внешние запросы.
+## Что Передается В Codex
 
-## Минимальная форма SDK worker-а
+Worker формирует prompt из четырех частей:
+
+1. системная инструкция worker-а;
+2. содержимое [skills/youtrack-task-analysis/SKILL.md](../skills/youtrack-task-analysis/SKILL.md);
+3. нормализованные данные YouTrack issue;
+4. полный JSON webhook-а.
+
+Worker не получает `YOUTRACK_TOKEN` и не вызывает YouTrack API.
+
+## Настройки Безопасности По Умолчанию
+
+Для YouTrack анализа используются консервативные настройки:
+
+```bash
+CODEX_SANDBOX_MODE=read-only
+CODEX_APPROVAL_POLICY=never
+CODEX_NETWORK_ACCESS=false
+CODEX_WEB_SEARCH=disabled
+CODEX_WORKER_CONCURRENCY=1
+```
+
+`CODEX_WORKER_CONCURRENCY=1` важен для MVP: так один worker не запускает
+параллельные turns в одном Codex thread.
+
+## Минимальный SDK Worker
+
+Упрощенная форма того, что делает [src/codex-worker.js](../src/codex-worker.js):
 
 ```js
 import { Codex } from "@openai/codex-sdk";
 
-const codexEnv = {};
-for (const key of ["PATH", "HOME", "CODEX_HOME", "OPENAI_API_KEY"]) {
-  if (process.env[key]) codexEnv[key] = process.env[key];
-}
-
 const codex = new Codex({
-  env: codexEnv,
+  env: {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    CODEX_HOME: process.env.CODEX_HOME,
+  },
 });
 
-const thread = codex.startThread({
-  workingDirectory: "/path/to/repo",
-  sandboxMode: "read-only",
-  approvalPolicy: "never",
-  networkAccessEnabled: false,
-  webSearchMode: "disabled",
-});
+const thread = job.sessionId
+  ? codex.resumeThread(job.sessionId)
+  : codex.startThread({
+      workingDirectory: process.cwd(),
+      sandboxMode: "read-only",
+      approvalPolicy: "never",
+      networkAccessEnabled: false,
+      webSearchMode: "disabled",
+    });
 
-const { events } = await thread.runStreamed("Analyze this YouTrack issue");
+const { events } = await thread.runStreamed(prompt);
 
 for await (const event of events) {
-  if (event.type === "item.completed") {
-    // Publish normalized progress to NATS here.
-  }
-  if (event.type === "turn.completed") {
-    // Publish usage and final state here.
-  }
+  // Worker превращает SDK events в нормализованные JetStream results.
 }
 ```
 
-## Диагностическая форма через CLI
+## Когда Нужен CLI Fallback
 
-```sh
-/home/komaroff/.local/bin/acodex exec --json \
+`codex exec --json` полезен, когда надо вручную воспроизвести prompt или
+посмотреть raw JSONL:
+
+```bash
+codex exec --json \
   --sandbox read-only \
   --ask-for-approval never \
   --cd /home/komaroff/dev/monitorsoft/synadia-nats-agents \
   'Analyze this YouTrack issue'
 ```
 
-Правила для CLI fallback:
+Правила для fallback:
 
-- запускать через `spawn(command, args)`, не через shell string;
+- запускать через `spawn(command, args)`, а не через shell string;
 - читать JSONL построчно;
 - считать exit code транспортным статусом;
-- ограничивать время выполнения внешним timeout;
+- ограничивать выполнение timeout-ом;
 - не передавать YouTrack token, webhook token и другие секреты в env Codex.
 
-## Standalone/daemon caveat
-
-`acodex` является wrapper-ом вокруг доступного в `PATH` `codex`. Он может
-подготовить CA/proxy окружение и вызвать CLI, но не создает installer-managed
-standalone install.
-
-Если команда требует:
+## Итоговый Поток
 
 ```text
-/home/komaroff/.codex/packages/standalone/current/codex
+JetStream job
+  -> src/codex-worker.js
+  -> @openai/codex-sdk
+  -> локальный Codex CLI
+  -> JetStream result event
 ```
 
-то это daemon/app-server режим. Его чинят установкой standalone Codex через
-официальный installer, а не правками wrapper-а.
-
-## Итог
-
-Для этого проекта основной путь такой:
-
-```text
-YouTrack webhook
-  -> gateway
-  -> NATS JetStream job
-  -> Codex SDK worker
-  -> NATS result event
-  -> UI / gateway / downstream consumer
-```
-
-`codex exec --json` остается рядом как воспроизводимый shell-инструмент для
-debug, smoke checks и аварийного one-shot запуска.
+Gateway и YouTrack остаются по другую сторону JetStream. Это держит секреты и
+ответственность раздельно: gateway пишет в YouTrack, worker запускает Codex.

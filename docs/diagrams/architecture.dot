@@ -1,24 +1,24 @@
 digraph G {
-  graph [rankdir=LR, bgcolor="white", pad="0.4", nodesep="0.7", ranksep="0.9", fontname="Arial", label="YouTrack -> JetStream -> Codex", labelloc="t", fontsize=22];
+  graph [rankdir=LR, bgcolor="white", pad="0.4", nodesep="0.7", ranksep="0.9", fontname="Arial", label="Архитектура: YouTrack -> JetStream -> Codex", labelloc="t", fontsize=22];
   node [shape=box, style="rounded,filled", fontname="Arial", fontsize=12, color="#334155", fillcolor="#f8fafc"];
   edge [fontname="Arial", fontsize=11, color="#475569", arrowsize=0.8];
 
   youtrack [label="YouTrack\nyt.giscloud.ru", fillcolor="#dbeafe"];
-  app [label="app service\nUI + gateway", fillcolor="#e0f2fe"];
+  app [label="Сервис app\nUI + gateway", fillcolor="#e0f2fe"];
   ui [label="Synadia Web UI\nVue + Bun bridge", fillcolor="#ecfeff"];
-  gateway [label="YouTrack gateway agent\nagents.prompt.youtrack.giscloud.codex", fillcolor="#f3e8ff"];
-  nats [label="NATS + JetStream\nstream YT_CODEX", fillcolor="#dcfce7"];
+  gateway [label="Gateway-агент YouTrack\nagents.prompt.youtrack.giscloud.codex", fillcolor="#f3e8ff"];
+  nats [label="NATS + JetStream\nстрим YT_CODEX", fillcolor="#dcfce7"];
   worker [label="codex_worker\n@openai/codex-sdk", fillcolor="#fae8ff"];
-  codex [label="Local Codex CLI\nread-only sandbox", fillcolor="#fee2e2"];
+  codex [label="Локальный Codex CLI\nsandbox read-only", fillcolor="#fee2e2"];
 
   youtrack -> app [label="POST /youtrack/webhook"];
-  app -> gateway [label="local HTTP :3401"];
-  gateway -> ui [label="chat JSON\nsubject youtrack.messages.*"];
-  gateway -> nats [label="job\nsubject youtrack.codex.jobs.giscloud"];
-  worker -> nats [label="durable pull\ncodex-worker"];
-  worker -> codex [label="start/resume thread"];
-  codex -> worker [label="streamed events"];
-  worker -> nats [label="result\nsubject youtrack.codex.results.giscloud"];
-  nats -> gateway [label="durable result consumer"];
-  gateway -> youtrack [label="custom field + comments"];
+  app -> gateway [label="локальный HTTP :3401"];
+  gateway -> ui [label="JSON в чат\nтема youtrack.messages.*"];
+  gateway -> nats [label="задание\nтема youtrack.codex.jobs.giscloud"];
+  worker -> nats [label="durable чтение\ncodex-worker"];
+  worker -> codex [label="старт/продолжение thread"];
+  codex -> worker [label="поток событий"];
+  worker -> nats [label="результат\nтема youtrack.codex.results.giscloud"];
+  nats -> gateway [label="durable consumer результатов"];
+  gateway -> youtrack [label="поле + комментарии"];
 }

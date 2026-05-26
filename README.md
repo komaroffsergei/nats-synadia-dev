@@ -1,66 +1,120 @@
 # synadia-nats-agents
 
-Простой учебный pipeline:
+Учебный, но production-развернутый pipeline для связи YouTrack, NATS
+JetStream и Codex:
 
 ```text
 YouTrack webhook
-  -> app:/youtrack/webhook
-  -> YouTrack gateway agent
-  -> NATS JetStream job
-  -> Codex worker
-  -> NATS JetStream result
-  -> YouTrack custom field + comments
+  -> POST /youtrack/webhook
+  -> gateway-агент YouTrack
+  -> job в NATS JetStream
+  -> отдельный Codex worker
+  -> result event в NATS JetStream
+  -> комментарии и поле Codex Session ID в YouTrack
 ```
 
-В Web UI виден один agent:
+Главное правило: HTTP webhook отвечает быстро после постановки job в
+JetStream. Codex не запускается внутри webhook handler-а.
+
+<a id="quick-links"></a>
+## Быстрые ссылки
+
+- [Что делает проект](#purpose)
+- [Как идет один webhook](#runtime-flow)
+- [HTTP endpoint-ы](#http-endpoints)
+- [Почему нет `/youtrack/agent-messages`](#agent-messages)
+- [NATS и JetStream](#nats-jetstream)
+- [Локальный запуск](#local-run)
+- [Production и deploy](#production)
+- [Диаграммы](#diagrams)
+- [Проверки перед push](#checks)
+- [Подробная карта кода](CODE_MAP.md)
+- [Как worker запускает Codex](docs/CODEX_AUTOMATION.md)
+- [README Web UI](examples/agent-web-ui/README.md)
+
+<a id="purpose"></a>
+## Что Делает Проект
+
+В Web UI виден один Synadia agent:
 
 ```text
 agents.prompt.youtrack.giscloud.codex
 ```
 
-Он нужен для discovery, chat diagnostics и автоматических webhook bubbles. Сам
-Codex запускается не в HTTP handler-е, а отдельным worker-ом из JetStream.
+Он нужен для discovery, ручного чата и отображения webhook-сообщений. Реальная
+автоматизация YouTrack идет через отдельные процессы:
 
-## Что Здесь Есть
+- `app` service: Web UI + gateway-агент YouTrack.
+- `codex_worker` service: читает jobs из JetStream и запускает Codex SDK.
+- `nats` service: NATS с включенным JetStream.
 
-- `src/youtrack-gateway.js` - HTTP webhook endpoint, Synadia AgentService,
-  YouTrack API client, JetStream enqueue и result consumer.
-- `src/codex-worker.js` - последовательный worker для jobs из JetStream.
-- `src/jetstream.js` - stream/consumer setup для `YT_CODEX`.
-- `skills/youtrack-task-analysis/SKILL.md` - prompt-инструкция для Codex.
-- `examples/agent-web-ui/` - Synadia Vue UI с NATS discovery, chat streaming и
-  auto-message handling для YouTrack webhook JSON.
-- `scripts/start-production.js` - один public app container: UI + gateway.
-- `stack/nats-synadia-dev.drs` - `nats`, `app`, `codex_worker`.
+Ключевые файлы:
 
-Подробная карта кода: [CODE_MAP.md](CODE_MAP.md).
+- [src/youtrack-gateway.js](src/youtrack-gateway.js) - HTTP webhook, YouTrack
+  API client, публикация chat message, постановка jobs, обработка results.
+- [src/codex-worker.js](src/codex-worker.js) - последовательный Codex worker.
+- [src/jetstream.js](src/jetstream.js) - stream, subjects и durable consumers.
+- [skills/youtrack-task-analysis/SKILL.md](skills/youtrack-task-analysis/SKILL.md)
+  - инструкция, которую worker вставляет в Codex prompt.
+- [examples/agent-web-ui](examples/agent-web-ui/) - Vue/Bun UI.
+- [stack/nats-synadia-dev.drs](stack/nats-synadia-dev.drs) - Docker Swarm
+  deploy: `nats`, `app`, `codex_worker`.
 
-## Runtime Flow
+<a id="runtime-flow"></a>
+## Как Идет Один Webhook
 
 1. YouTrack отправляет `POST /youtrack/webhook`.
-2. Gateway нормализует payload: `issueId = payload.id`, `event = payload.event`,
-   `changedFields = payload.changedFields`.
-3. Gateway всегда публикует полный JSON webhook-а в
-   `youtrack.messages.giscloud.codex`, чтобы открытый UI добавил bubble в чат.
-4. Для `issueCreated` и `issueUpdated` gateway читает поле `Codex Session ID` и
-   публикует job в JetStream subject `youtrack.codex.jobs.giscloud`.
-5. `commentAdded` и update только поля `Codex Session ID` игнорируются, чтобы не
-   создавать webhook loop.
-6. Worker читает jobs durable consumer-ом `codex-worker`, запускает или resume-ит
-   Codex thread, читает skill file и публикует result event в
-   `youtrack.codex.results.giscloud`.
-7. Gateway durable consumer `youtrack-gateway-results` пишет `Codex Session ID`
-   в custom field и добавляет комментарии о старте session и результате анализа.
+2. Gateway нормализует payload: `issueId`, `event`, `changedFields`,
+   `summary`, `description`.
+3. Gateway публикует полный JSON webhook-а в NATS subject
+   `youtrack.messages.giscloud.codex`. Открытый UI показывает это как bubble в
+   чате.
+4. Gateway ставит job в JetStream только для `issueCreated` и `issueUpdated`.
+5. `commentAdded` и update только поля `Codex Session ID` игнорируются, чтобы
+   не получить webhook loop от собственных комментариев gateway.
+6. Worker берет job durable consumer-ом `codex-worker`.
+7. Если в задаче уже есть `Codex Session ID`, worker делает resume thread. Если
+   поля нет, worker начинает новый Codex thread.
+8. Worker публикует `session_started`, `analysis_completed` или
+   `analysis_failed` в `youtrack.codex.results.giscloud`.
+9. Gateway durable consumer-ом `youtrack-gateway-results` получает result event.
+10. Gateway пишет `Codex Session ID` и комментарии в YouTrack.
 
-## NATS And JetStream
+<a id="http-endpoints"></a>
+## HTTP Endpoint-ы
 
-Локальный NATS:
+Production URL:
 
-```bash
-npm run nats
+```text
+https://nats-synadia-dev.gis-master.ru
 ```
 
-`nats.conf` включает JetStream и пишет store в `.runtime/nats/jetstream`.
+| Endpoint | Метод | Назначение |
+| --- | --- | --- |
+| `/healthz` | `GET` | Проверяет UI, NATS, gateway и JetStream consumers. |
+| `/youtrack/api-check` | `GET` | Проверяет YouTrack token, comments API, поле `Codex Session ID` и JetStream. |
+| `/youtrack/webhook` | `POST` | Единственный публичный webhook endpoint для YouTrack. |
+| `/youtrack/webhooks/last` | `GET` | Последние принятые webhook-и в памяти gateway. |
+| `/youtrack/jobs/last` | `GET` | Последние jobs/results в памяти gateway. |
+| `/youtrack/dry-run-state` | `GET` | In-memory состояние только для `YOUTRACK_DRY_RUN=true`. |
+
+<a id="agent-messages"></a>
+## Почему Нет `/youtrack/agent-messages`
+
+`/youtrack/agent-messages` не нужен и не реализован.
+
+В этой версии "agent messages" - это не HTTP endpoint, а NATS subject:
+
+```text
+youtrack.messages.giscloud.codex
+```
+
+Gateway публикует туда JSON webhook-а, а Bun bridge в Web UI подписывается на
+subject и добавляет сообщение в чат. Поэтому live-ответ `404` на
+`/youtrack/agent-messages` корректен: такого HTTP route нет в runtime contract.
+
+<a id="nats-jetstream"></a>
+## NATS и JetStream
 
 Основные subjects:
 
@@ -71,19 +125,29 @@ youtrack.codex.jobs.giscloud
 youtrack.codex.results.giscloud
 ```
 
-Основная шина задаётся только через `NATS_URL`.
+JetStream:
+
+- stream: `YT_CODEX`;
+- job subject: `youtrack.codex.jobs.giscloud`;
+- result subject: `youtrack.codex.results.giscloud`;
+- worker durable consumer: `codex-worker`;
+- gateway result durable consumer: `youtrack-gateway-results`.
+
+Основная шина для всех процессов задается через `NATS_URL`:
 
 ```bash
 NATS_URL=nats://127.0.0.1:4222
 ```
 
-Для UI discovery по нескольким независимым NATS-шинам есть только JSON:
+`NATS_URLS_JSON` нужен только Web UI, если надо показывать discovery сразу по
+нескольким независимым NATS-шинам:
 
 ```bash
 NATS_URLS_JSON='{"main":"nats://127.0.0.1:4222","extra":"nats://host:4222"}'
 ```
 
-## Local Run
+<a id="local-run"></a>
+## Локальный Запуск
 
 Установить зависимости:
 
@@ -93,7 +157,7 @@ cd examples/agent-web-ui
 bun install
 ```
 
-В отдельных терминалах:
+Запустить smoke без реального YouTrack и без реального Codex:
 
 ```bash
 npm run nats
@@ -103,7 +167,7 @@ npm run ui:bridge
 npm run ui:vite
 ```
 
-UI: `http://localhost:5173`.
+UI будет доступен на `http://localhost:5173`.
 
 Webhook smoke:
 
@@ -113,13 +177,15 @@ curl -sS http://127.0.0.1:3401/youtrack/webhook \
   -d '{"id":"CS-TEST","event":"issueCreated","summary":"Test issue","description":"Check Codex pipeline","changedFields":["summary"]}' | jq
 ```
 
-Проверить dry-run state:
+Проверить in-memory состояние:
 
 ```bash
 curl -sS http://127.0.0.1:3401/youtrack/dry-run-state | jq
+curl -sS http://127.0.0.1:3401/youtrack/jobs/last | jq
 ```
 
-## YouTrack API
+<a id="youtrack"></a>
+## YouTrack
 
 Production gateway требует permanent token:
 
@@ -132,16 +198,17 @@ YOUTRACK_CODEX_SESSION_FIELD='Codex Session ID'
 `/youtrack/api-check` проверяет:
 
 - bearer token;
+- чтение задач;
 - comments API;
-- наличие и тип custom field `Codex Session ID`;
-- JetStream stream/consumers.
+- наличие custom field `Codex Session ID`;
+- тип поля `TextIssueCustomField`;
+- готовность JetStream stream/consumers.
 
-Custom field должен быть text field (`TextIssueCustomField`).
-
+<a id="codex-worker"></a>
 ## Codex Worker
 
-Worker не получает `YOUTRACK_TOKEN` и не вызывает YouTrack API. Он читает только
-JetStream jobs и пишет JetStream results.
+Worker не получает `YOUTRACK_TOKEN` и не вызывает YouTrack API. Он знает только
+NATS, Codex SDK и skill file.
 
 Минимальные env:
 
@@ -160,24 +227,65 @@ CODEX_WEB_SEARCH=disabled
 CODEX_DRY_RUN=true npm run worker
 ```
 
-## Production
+<a id="production"></a>
+## Production и Deploy
 
-Один Docker image используется двумя service-ами:
+Один Docker image используется двумя app-процессами:
 
-- `app` - Bun UI + YouTrack gateway.
-- `codex_worker` - только `node src/codex-worker.js`.
+- `app` - Bun UI + YouTrack gateway. Получает `YOUTRACK_TOKEN`.
+- `codex_worker` - только `node src/codex-worker.js`. Получает OpenAI/Codex env,
+  но не получает `YOUTRACK_TOKEN`.
 
-В `codex_worker` не пробрасывается `YOUTRACK_TOKEN`; в `app` не нужен
-`OPENAI_API_KEY`.
+Deploy идет через GitLab pipeline:
 
-## Diagrams
+```text
+push в main
+  -> build push
+  -> deploy
+  -> dry-stack deploy в Docker Swarm на gis-master.ru
+```
 
-- [architecture.png](docs/diagrams/architecture.png)
-- [webhook-sequence.png](docs/diagrams/webhook-sequence.png)
-- [jetstream-data-flow.png](docs/diagrams/jetstream-data-flow.png)
-- [deployment.png](docs/diagrams/deployment.png)
+После deploy проверить:
 
-## Checks
+```bash
+curl -sS https://nats-synadia-dev.gis-master.ru/healthz | jq
+curl -sS https://nats-synadia-dev.gis-master.ru/youtrack/api-check | jq
+```
+
+<a id="diagrams"></a>
+## Диаграммы
+
+### Общая Архитектура
+
+![Общая архитектура](docs/diagrams/architecture.png)
+
+На схеме видно разделение ответственности: YouTrack приходит в `app`, gateway
+публикует chat JSON и JetStream job, worker отдельно запускает Codex и
+возвращает result event.
+
+### Последовательность Webhook
+
+![Последовательность webhook](docs/diagrams/webhook-sequence.png)
+
+Эта диаграмма показывает один полный цикл: от входящего webhook-а до записи
+поля и комментариев обратно в YouTrack.
+
+### Поток Данных JetStream
+
+![Поток данных JetStream](docs/diagrams/jetstream-data-flow.png)
+
+Здесь показано, какие subjects попадают в stream `YT_CODEX`, кто читает jobs и
+кто читает results. В MVP worker читает последовательно.
+
+### Деплой
+
+![Деплой](docs/diagrams/deployment.png)
+
+Схема деплоя показывает один Docker image и три service-а в Docker Swarm:
+`nats`, `app`, `codex_worker`.
+
+<a id="checks"></a>
+## Проверки Перед Push
 
 ```bash
 node --check src/*.js scripts/*.js

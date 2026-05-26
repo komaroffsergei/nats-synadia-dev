@@ -1,24 +1,24 @@
 digraph G {
-  graph [rankdir=LR, bgcolor="white", pad="0.4", nodesep="0.6", ranksep="0.8", fontname="Arial", label="Deployment", labelloc="t", fontsize=22];
+  graph [rankdir=LR, bgcolor="white", pad="0.4", nodesep="0.6", ranksep="0.8", fontname="Arial", label="Деплой", labelloc="t", fontsize=22];
   node [shape=box, style="rounded,filled", fontname="Arial", fontsize=12, color="#334155", fillcolor="#f8fafc"];
   edge [fontname="Arial", fontsize=11, color="#475569", arrowsize=0.8];
 
-  repo [label="GitLab repo\ntrizna/nats-synadia-dev", fillcolor="#dbeafe"];
-  image [label="One Docker image\nNode + Bun + UI build", fillcolor="#e0f2fe"];
+  repo [label="Репозиторий GitLab\ntrizna/nats-synadia-dev", fillcolor="#dbeafe"];
+  image [label="Один образ Docker\nNode + Bun + сборка UI", fillcolor="#e0f2fe"];
   swarm [label="Docker Swarm\ngis-master.ru", fillcolor="#dcfce7"];
-  nats [label="Service: nats\nJetStream enabled", fillcolor="#dcfce7"];
-  app [label="Service: app\nUI + YouTrack gateway", fillcolor="#fae8ff"];
-  worker [label="Service: codex_worker\nCodex SDK only", fillcolor="#f3e8ff"];
-  traefik [label="Traefik ingress\n/ and /youtrack/*", fillcolor="#fee2e2"];
-  youtrack [label="YouTrack webhook", fillcolor="#dbeafe"];
+  nats [label="Сервис nats\nJetStream включен", fillcolor="#dcfce7"];
+  app [label="Сервис app\nUI + gateway YouTrack", fillcolor="#fae8ff"];
+  worker [label="Сервис codex_worker\nтолько Codex SDK", fillcolor="#f3e8ff"];
+  traefik [label="Traefik ingress\n/ и /youtrack/*", fillcolor="#fee2e2"];
+  youtrack [label="Webhook YouTrack", fillcolor="#dbeafe"];
 
-  repo -> image [label="CI build"];
-  image -> swarm [label="dry-stack deploy"];
+  repo -> image [label="CI сборка"];
+  image -> swarm [label="деплой dry-stack"];
   swarm -> nats;
   swarm -> app;
   swarm -> worker;
   app -> nats [label="NATS_URL"];
   worker -> nats [label="NATS_URL"];
-  traefik -> app [label="port 3300"];
+  traefik -> app [label="порт 3300"];
   youtrack -> traefik [label="POST /youtrack/webhook"];
 }

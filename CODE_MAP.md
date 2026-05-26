@@ -1,98 +1,342 @@
-# Code Map
+# Карта Кода
 
-## Runtime
+Этот документ объясняет, как устроен текущий runtime
+`YouTrack -> JetStream -> Codex worker -> YouTrack comments`.
 
-- `src/common.js` - `.env` loading, `NATS_URL`, NATS connect helper, JSON/UTF-8
-  helpers, small formatting helpers.
-- `src/jetstream.js` - owns JetStream names and setup:
-  - stream `YT_CODEX`;
-  - job subject `youtrack.codex.jobs.giscloud`;
-  - result subject `youtrack.codex.results.giscloud`;
-  - durable consumers `codex-worker` and `youtrack-gateway-results`.
-- `src/youtrack-gateway.js` - public-facing gateway:
-  - registers `agents.prompt.youtrack.giscloud.codex`;
-  - serves `/youtrack/webhook`, `/youtrack/api-check`, `/healthz`;
-  - publishes full webhook JSON to `youtrack.messages.giscloud.codex`;
-  - enqueues Codex jobs into JetStream;
-  - consumes worker results and writes YouTrack custom field/comments.
-- `src/codex-worker.js` - worker process:
-  - consumes `youtrack.codex.jobs.giscloud`;
-  - starts or resumes Codex SDK threads;
-  - reads `skills/youtrack-task-analysis/SKILL.md`;
-  - publishes `session_started`, `analysis_completed`, `analysis_failed`.
-- `src/monitor.js` - optional local NATS traffic monitor.
+Если нужен короткий обзор и команды запуска, сначала читай
+[README.md](README.md). Здесь собрана подробная карта файлов, алгоритм и
+диаграммы.
 
-## Step-By-Step Algorithm
+<a id="toc"></a>
+## Содержание
 
-1. YouTrack sends `POST /youtrack/webhook`.
-   Code: `src/youtrack-gateway.js#handleWebhook`.
+- [Проверенный вывод про `/youtrack/agent-messages`](#agent-messages)
+- [Общая архитектура](#architecture)
+- [Пошаговый алгоритм](#algorithm)
+- [Файлы runtime](#runtime-files)
+- [Web UI](#web-ui)
+- [JetStream](#jetstream)
+- [Deploy](#deploy)
+- [Переменные окружения](#env)
+- [Что удалено из старой версии](#removed)
 
-2. Gateway normalizes payload.
-   Code: `normalizeWebhookPayload()` extracts `issueId`, `event`,
-   `changedFields`, `summary`, `description`.
+<a id="agent-messages"></a>
+## Проверенный Вывод Про `/youtrack/agent-messages`
 
-3. Gateway publishes full chat JSON.
-   Code: `publishWebhookChatMessage()` publishes to
-   `youtrack.messages.giscloud.codex`; UI bridge subscribes in
-   `examples/agent-web-ui/server/bridge.ts#startYouTrackMessageWatch`.
+`/youtrack/agent-messages` можно не поддерживать и не добавлять.
 
-4. Gateway enqueues a JetStream job.
-   Code: `enqueueCodexJob()` reads `Codex Session ID` from YouTrack, then
-   publishes a job to `youtrack.codex.jobs.giscloud`.
+Проверка live runtime показала, что route отсутствует и gateway возвращает
+ожидаемый `404 not_found` со списком реальных endpoint-ов:
 
-5. Worker runs or resumes Codex.
-   Code: `src/codex-worker.js#processJob`.
-   If `job.sessionId` exists, it calls `codex.resumeThread(sessionId)`;
-   otherwise it calls `codex.startThread()`.
+- `GET /healthz`
+- `GET /youtrack/api-check`
+- `POST /youtrack/webhook`
+- `GET /youtrack/webhooks/last`
+- `GET /youtrack/jobs/last`
+- `GET /youtrack/dry-run-state`
 
-6. Worker publishes result events.
-   Code: `publishResult()` sends results to `youtrack.codex.results.giscloud`.
+"Agent messages" в этом проекте - это NATS subject, а не HTTP endpoint:
 
-7. Gateway writes back to YouTrack.
-   Code: `handleResultEvent()`:
-   - `session_started` -> update text custom field `Codex Session ID` and add a
-     start comment;
-   - `analysis_completed` -> add result comment;
-   - `analysis_failed` -> add failure comment.
+```text
+youtrack.messages.giscloud.codex
+```
 
+Кодовая цепочка такая:
+
+1. Gateway вызывает `publishWebhookChatMessage()` в
+   [src/youtrack-gateway.js](src/youtrack-gateway.js).
+2. Сообщение публикуется в NATS subject `youtrack.messages.giscloud.codex`.
+3. Bun bridge подписывается на этот subject в
+   [examples/agent-web-ui/server/bridge.ts](examples/agent-web-ui/server/bridge.ts).
+4. UI добавляет webhook JSON как сообщение в чат выбранного YouTrack/Codex
+   agent-а.
+
+HTTP endpoint `/youtrack/agent-messages` в этой схеме лишний: он дублировал бы
+NATS-подписку и создавал бы еще один источник состояния.
+
+<a id="architecture"></a>
+## Общая Архитектура
+
+![Общая архитектура](docs/diagrams/architecture.png)
+
+Что происходит на схеме:
+
+- YouTrack отправляет webhook в публичный `app` service.
+- Внутри `app` работают Web UI и gateway-агент.
+- Gateway публикует полный JSON webhook-а в NATS subject для UI.
+- Gateway ставит Codex job в JetStream.
+- `codex_worker` отдельно читает job, запускает или продолжает Codex thread и
+  пишет result event.
+- Gateway читает result event и пишет поле/комментарии в YouTrack.
+
+<a id="algorithm"></a>
+## Пошаговый Алгоритм
+
+### 1. YouTrack Делает POST
+
+YouTrack отправляет:
+
+```text
+POST /youtrack/webhook
+```
+
+Публичный request приходит в Bun UI server, потому что наружу опубликован только
+порт `3300`. Bun server прокидывает все `/youtrack/*` запросы в локальный
+gateway на `127.0.0.1:3401`.
+
+Код:
+
+- [examples/agent-web-ui/server/index.ts](examples/agent-web-ui/server/index.ts)
+  - `proxyYouTrackRequest()`;
+- [src/youtrack-gateway.js](src/youtrack-gateway.js) - `handleWebhook()`.
+
+### 2. Gateway Нормализует Payload
+
+Gateway приводит разные формы webhook payload-а к одному виду:
+
+```js
+{
+  issueId,
+  event,
+  changedFields,
+  summary,
+  description
+}
+```
+
+Код: `normalizeWebhookPayload()` в
+[src/youtrack-gateway.js](src/youtrack-gateway.js).
+
+### 3. Gateway Всегда Публикует JSON В Чат
+
+Любой принятый webhook публикуется в:
+
+```text
+youtrack.messages.giscloud.codex
+```
+
+Это нужно только для видимости в Web UI. Это не job для Codex.
+
+Код:
+
+- `publishWebhookChatMessage()` в
+  [src/youtrack-gateway.js](src/youtrack-gateway.js);
+- `startYouTrackMessageWatch()` в
+  [examples/agent-web-ui/server/bridge.ts](examples/agent-web-ui/server/bridge.ts).
+
+### 4. Gateway Решает, Нужен Ли Codex Job
+
+Job создается только для:
+
+- `issueCreated`;
+- `issueUpdated`.
+
+Job не создается для:
+
+- `commentAdded`;
+- `issueUpdated`, где изменилось только поле `Codex Session ID`.
+
+Это защищает от webhook loop: gateway сам пишет комментарии и поле
+`Codex Session ID`, но эти изменения не должны повторно запускать Codex.
+
+Код:
+
+- `shouldEnqueueCodexJob()`;
+- `isCodexSessionFieldOnlyUpdate()`;
+- `enqueueCodexJob()`.
+
+### 5. Gateway Ставит Job В JetStream
+
+Перед постановкой job gateway читает задачу из YouTrack и достает текущее
+значение custom field:
+
+```text
+Codex Session ID
+```
+
+Если значение есть, worker сможет продолжить существующий Codex thread. Если
+значения нет, worker начнет новый thread.
+
+Job публикуется в:
+
+```text
+youtrack.codex.jobs.giscloud
+```
+
+### 6. Worker Читает Job
+
+Worker запускается отдельным процессом:
+
+```bash
+node src/codex-worker.js
+```
+
+Он читает jobs durable consumer-ом:
+
+```text
+codex-worker
+```
+
+В MVP concurrency равен `1`, чтобы по одной задаче не было параллельных turns в
+одном Codex thread.
+
+### 7. Worker Запускает Или Продолжает Codex Thread
+
+Если в job есть `sessionId`, worker делает resume thread. Если `sessionId` нет,
+worker начинает новый thread.
+
+Worker читает skill:
+
+```text
+skills/youtrack-task-analysis/SKILL.md
+```
+
+И добавляет его в prompt вместе с issue data и полным webhook JSON.
+
+### 8. Worker Публикует Result Events
+
+Worker пишет события в:
+
+```text
+youtrack.codex.results.giscloud
+```
+
+Типы result events:
+
+- `session_started` - thread создан или продолжен;
+- `analysis_completed` - Codex вернул итоговый анализ;
+- `analysis_failed` - Codex или worker завершился ошибкой.
+
+### 9. Gateway Пишет Результаты В YouTrack
+
+Gateway читает results durable consumer-ом:
+
+```text
+youtrack-gateway-results
+```
+
+Дальше:
+
+- `session_started` -> записывает `Codex Session ID` и добавляет стартовый
+  комментарий;
+- `analysis_completed` -> добавляет комментарий с результатом анализа;
+- `analysis_failed` -> добавляет комментарий с ошибкой.
+
+Код: `handleResultEvent()` в
+[src/youtrack-gateway.js](src/youtrack-gateway.js).
+
+<a id="runtime-files"></a>
+## Файлы Runtime
+
+| Файл | Назначение |
+| --- | --- |
+| [src/common.js](src/common.js) | `.env`, `NATS_URL`, подключение к NATS, JSON helpers, форматирование ошибок. |
+| [src/jetstream.js](src/jetstream.js) | Создание stream `YT_CODEX`, subjects и durable consumers. |
+| [src/youtrack-gateway.js](src/youtrack-gateway.js) | HTTP webhook, Synadia AgentService, YouTrack API, enqueue jobs, обработка results. |
+| [src/codex-worker.js](src/codex-worker.js) | Отдельный worker для Codex jobs. |
+| [src/monitor.js](src/monitor.js) | Локальный монитор NATS traffic. |
+| [skills/youtrack-task-analysis/SKILL.md](skills/youtrack-task-analysis/SKILL.md) | Инструкция анализа YouTrack задачи для Codex. |
+
+<a id="web-ui"></a>
 ## Web UI
 
-- `examples/agent-web-ui/server/config.ts` - parses `NATS_URL` and optional
-  `NATS_URLS_JSON`.
-- `examples/agent-web-ui/server/index.ts` - Bun HTTP/WebSocket server:
-  - serves `/ws`;
-  - proxies `/youtrack/*` to the local gateway;
-  - `/healthz` reports UI, NATS, gateway and JetStream readiness.
-- `examples/agent-web-ui/server/bridge.ts` - server-side NATS bridge:
-  discovery, prompt streaming, cancel/query reply, heartbeat tracking and
-  YouTrack auto-message forwarding.
-- `examples/agent-web-ui/src/composables/useBridge.ts` - browser WebSocket
-  client.
-- `examples/agent-web-ui/src/stores/agents.ts` - agent list and simple
-  YouTrack/other grouping.
-- `examples/agent-web-ui/src/components/AgentGrid.vue` - cards list.
-- `examples/agent-web-ui/src/components/ChatPanel.vue` - selected agent chat.
-- `examples/agent-web-ui/src/composables/promptStreaming.ts` - builds chat
-  messages from streaming events.
+![Последовательность webhook](docs/diagrams/webhook-sequence.png)
 
-## Deployment
+Web UI не подключается к NATS из браузера. Схема такая:
 
-- `docker/Dockerfile` - one image with Node, Bun, root dependencies and built UI.
-- `scripts/start-production.js` - app service entrypoint; waits for NATS, starts
-  `src/youtrack-gateway.js` and Bun UI server.
-- `stack/nats-synadia-dev.drs` - dry-stack definition:
-  - `nats` service with JetStream enabled;
-  - `app` service with `YOUTRACK_TOKEN`;
-  - `codex_worker` service with OpenAI/Codex env but without YouTrack token.
-- `.gitlab-ci.yml` - build/deploy wrapper and env forwarding.
+```text
+Browser Vue UI
+  -> WebSocket /ws
+  -> Bun bridge
+  -> @synadia-ai/agents
+  -> NATS
+```
 
-## Important Env
+Файлы:
 
-- `NATS_URL` - main NATS bus for app, gateway and worker.
-- `NATS_URLS_JSON` - optional UI-only multi-NATS discovery.
-- `YOUTRACK_BASE_URL`, `YOUTRACK_TOKEN`, `YOUTRACK_CODEX_SESSION_FIELD`.
-- `YOUTRACK_AGENT_MESSAGE_SUBJECT`.
-- `YT_CODEX_STREAM`, `YT_CODEX_JOB_SUBJECT`, `YT_CODEX_RESULT_SUBJECT`.
-- `OPENAI_API_KEY` or `CODEX_API_KEY`.
-- `CODEX_DRY_RUN=true` for local smoke without a live model.
-- `YOUTRACK_DRY_RUN=true` for local smoke without YouTrack writes.
+| Файл | Назначение |
+| --- | --- |
+| [examples/agent-web-ui/server/config.ts](examples/agent-web-ui/server/config.ts) | Читает `NATS_URL` и опциональный `NATS_URLS_JSON`. |
+| [examples/agent-web-ui/server/index.ts](examples/agent-web-ui/server/index.ts) | Bun HTTP/WebSocket server, proxy `/youtrack/*`, `/healthz`. |
+| [examples/agent-web-ui/server/bridge.ts](examples/agent-web-ui/server/bridge.ts) | Discovery, prompt streaming, heartbeat tracking, подписка на `youtrack.messages.giscloud.codex`. |
+| [examples/agent-web-ui/src/composables/useBridge.ts](examples/agent-web-ui/src/composables/useBridge.ts) | Browser WebSocket client. |
+| [examples/agent-web-ui/src/stores/agents.ts](examples/agent-web-ui/src/stores/agents.ts) | Список agents и группировка YouTrack/Other. |
+| [examples/agent-web-ui/src/components/AgentGrid.vue](examples/agent-web-ui/src/components/AgentGrid.vue) | Карточки agents. |
+| [examples/agent-web-ui/src/components/ChatPanel.vue](examples/agent-web-ui/src/components/ChatPanel.vue) | Чат выбранного agent-а. |
+
+<a id="jetstream"></a>
+## JetStream
+
+![Поток данных JetStream](docs/diagrams/jetstream-data-flow.png)
+
+На диаграмме показано, что jobs и results лежат в одном stream `YT_CODEX`, но
+читаются разными durable consumers.
+
+| Константа | Значение по умолчанию | Где используется |
+| --- | --- | --- |
+| `YT_CODEX_STREAM` | `YT_CODEX` | Stream для jobs и results. |
+| `YT_CODEX_JOB_SUBJECT` | `youtrack.codex.jobs.giscloud` | Gateway publish, worker consume. |
+| `YT_CODEX_RESULT_SUBJECT` | `youtrack.codex.results.giscloud` | Worker publish, gateway consume. |
+| `CODEX_WORKER_DURABLE` | `codex-worker` | Durable consumer worker-а. |
+| `GATEWAY_RESULTS_DURABLE` | `youtrack-gateway-results` | Durable consumer gateway-а. |
+
+`/healthz` и `/youtrack/api-check` показывают состояние stream и consumers.
+
+<a id="deploy"></a>
+## Deploy
+
+![Деплой](docs/diagrams/deployment.png)
+
+Deploy описан в:
+
+- [docker/Dockerfile](docker/Dockerfile) - один runtime image с Node, Bun и
+  собранным UI;
+- [scripts/start-production.js](scripts/start-production.js) - entrypoint
+  service-а `app`;
+- [stack/nats-synadia-dev.drs](stack/nats-synadia-dev.drs) - Docker Swarm
+  services;
+- [.gitlab-ci.yml](.gitlab-ci.yml) - build/deploy pipeline.
+
+Service-и:
+
+- `nats` - NATS с `-js`;
+- `app` - публичный service, UI + gateway, получает `YOUTRACK_TOKEN`;
+- `codex_worker` - отдельный worker, получает OpenAI/Codex env, но не получает
+  `YOUTRACK_TOKEN`.
+
+<a id="env"></a>
+## Переменные Окружения
+
+| Переменная | Для кого | Назначение |
+| --- | --- | --- |
+| `NATS_URL` | все процессы | Основная NATS-шина. |
+| `NATS_URLS_JSON` | UI | Дополнительные NATS-шины только для discovery. |
+| `YOUTRACK_BASE_URL` | gateway | База YouTrack API. |
+| `YOUTRACK_TOKEN` | gateway | Permanent token YouTrack. Не передавать worker-у. |
+| `YOUTRACK_WEBHOOK_TOKEN` | gateway | Опциональная проверка webhook request-а. |
+| `YOUTRACK_CODEX_SESSION_FIELD` | gateway | Название text custom field для Codex thread id. |
+| `YOUTRACK_AGENT_MESSAGE_SUBJECT` | gateway и UI | NATS subject для webhook bubbles. |
+| `OPENAI_API_KEY` / `CODEX_API_KEY` | worker | Auth для Codex. Не нужен gateway-у. |
+| `CODEX_DRY_RUN` | worker, gateway | Локальный smoke без реального Codex. |
+| `YOUTRACK_DRY_RUN` | gateway | Локальный smoke без записи в YouTrack. |
+| `CODEX_SANDBOX_MODE` | worker | По умолчанию `read-only`. |
+| `CODEX_APPROVAL_POLICY` | worker | По умолчанию `never`. |
+| `CODEX_NETWORK_ACCESS` | worker | По умолчанию `false`. |
+| `CODEX_WEB_SEARCH` | worker | По умолчанию `disabled`. |
+
+<a id="removed"></a>
+## Что Удалено Из Старой Версии
+
+В текущем runtime нет:
+
+- basic agents;
+- controller/group sessions;
+- personas;
+- OpenClaw plugins/scripts;
+- Ollama config;
+- query-param выбора NATS через `?nats=...`;
+- HTTP endpoint-а `/youtrack/agent-messages`.
+
+Это намеренное упрощение. В проекте остался один основной сценарий:
+YouTrack webhook ставит job, worker анализирует задачу, gateway пишет результат
+в YouTrack.

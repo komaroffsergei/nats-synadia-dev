@@ -1,23 +1,23 @@
 digraph G {
-  graph [rankdir=TB, bgcolor="white", pad="0.35", nodesep="0.55", ranksep="0.55", fontname="Arial", label="Webhook Sequence", labelloc="t", fontsize=22];
+  graph [rankdir=TB, bgcolor="white", pad="0.35", nodesep="0.55", ranksep="0.55", fontname="Arial", label="Последовательность обработки webhook", labelloc="t", fontsize=22];
   node [fontname="Arial", fontsize=11, color="#334155"];
   edge [fontname="Arial", fontsize=10, color="#475569", arrowsize=0.75];
 
   youtrack [shape=box, style="rounded,filled", fillcolor="#dbeafe", label="YouTrack"];
   gateway [shape=box, style="rounded,filled", fillcolor="#e0f2fe", label="Gateway\nsrc/youtrack-gateway.js"];
-  ui [shape=box, style="rounded,filled", fillcolor="#ecfeff", label="Web UI\nchat bubble"];
+  ui [shape=box, style="rounded,filled", fillcolor="#ecfeff", label="Web UI\nсообщение в чате"];
   js [shape=box, style="rounded,filled", fillcolor="#dcfce7", label="JetStream\nYT_CODEX"];
-  worker [shape=box, style="rounded,filled", fillcolor="#fae8ff", label="Codex worker"];
+  worker [shape=box, style="rounded,filled", fillcolor="#fae8ff", label="Worker Codex"];
   codex [shape=box, style="rounded,filled", fillcolor="#fee2e2", label="Codex SDK"];
 
   youtrack -> gateway [label="1. POST /youtrack/webhook"];
-  gateway -> gateway [label="2. normalize id/event/fields"];
-  gateway -> ui [label="3. publish full webhook JSON"];
-  gateway -> js [label="4. enqueue job if issueCreated/issueUpdated"];
-  worker -> js [label="5. consume job"];
+  gateway -> gateway [label="2. нормализовать id/event/fields"];
+  gateway -> ui [label="3. опубликовать полный JSON webhook-а"];
+  gateway -> js [label="4. поставить задание для issueCreated/issueUpdated"];
+  worker -> js [label="5. прочитать задание"];
   worker -> codex [label="6. startThread/resumeThread + runStreamed"];
-  codex -> worker [label="7. thread/result events"];
-  worker -> js [label="8. publish session/result"];
-  js -> gateway [label="9. result consumer"];
-  gateway -> youtrack [label="10. field/comment writes"];
+  codex -> worker [label="7. события thread/result"];
+  worker -> js [label="8. опубликовать session/result"];
+  js -> gateway [label="9. consumer результатов"];
+  gateway -> youtrack [label="10. записать поле и комментарии"];
 }
