@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd /build/docker
 
-export REGISTRY_HOST="${CI_REGISTRY_HOST:-builder-registry.builder.giscloud.ru}"
+export REGISTRY_HOST="${REGISTRY_HOST:-git.giscloud.ru}"
 export OTEL_RESOURCE_ATTRIBUTES="service.name=docker-builder,pipeline.id=${CI_PIPELINE_ID:-local},project.name=${CI_PROJECT_NAME:-nats-synadia-dev}"
 export CI_PIPELINE_IID="${CI_PIPELINE_IID:-${CI_PIPELINE_ID:-0}}"
 export BUILDX_BAKE_ENTITLEMENTS_FS="${BUILDX_BAKE_ENTITLEMENTS_FS:-0}"

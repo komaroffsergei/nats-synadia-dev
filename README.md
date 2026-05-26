@@ -688,7 +688,7 @@ push to GitLab
   -> .gitlab-ci.yml
   -> docker/Dockerfile.build
   -> build-labels + docker buildx
-  -> builder-registry.builder.giscloud.ru/trizna/nats-synadia-dev/app/main
+  -> git.giscloud.ru/trizna/nats-synadia-dev/app/main
   -> stack/Dockerfile.deploy
   -> dry-stack swarm_deploy
   -> https://nats-synadia-dev.gis-master.ru

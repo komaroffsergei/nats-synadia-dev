@@ -1,7 +1,7 @@
 Options name: 'nats-synadia-dev'
 
 HOST = 'nats-synadia-dev.*'
-APP_IMAGE = 'builder-registry.builder.giscloud.ru/trizna/nats-synadia-dev/app/main'
+APP_IMAGE = 'git.giscloud.ru/trizna/nats-synadia-dev/app/main'
 DEFAULT_NATS_URL = 'nats://nats-synadia-dev_nats:4222'
 NATS_URL = ENV['NATS_URL'] || ENV['NATS_SERVERS'] || ENV['NATS_SERVICE_URL'] || DEFAULT_NATS_URL
 NATS_CONNECTIONS = ENV['NATS_CONNECTIONS']
