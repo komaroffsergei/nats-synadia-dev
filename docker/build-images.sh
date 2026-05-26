@@ -3,18 +3,18 @@ set -euo pipefail
 
 cd /build/docker
 
-export REGISTRY_HOST="${REGISTRY_HOST:-git.giscloud.ru}"
+export REGISTRY_HOST="${REGISTRY_HOST:-ghcr.io}"
 export OTEL_RESOURCE_ATTRIBUTES="service.name=docker-builder,pipeline.id=${CI_PIPELINE_ID:-local},project.name=${CI_PROJECT_NAME:-nats-synadia-dev}"
 export CI_PIPELINE_IID="${CI_PIPELINE_IID:-${CI_PIPELINE_ID:-0}}"
 export BUILDX_BAKE_ENTITLEMENTS_FS="${BUILDX_BAKE_ENTITLEMENTS_FS:-0}"
 
 # GitLab runner раньше приносил готовый Docker auth через mounted
 # `/root/.docker`, но это состояние зависит от конкретного runner host.
-# Поэтому в CI сначала пробуем явно залогиниться в registry стандартными
-# GitLab credentials. В локальном запуске переменных обычно нет, и блок
-# спокойно пропускается.
-REGISTRY_USER="${CI_REGISTRY_USER:-gitlab-ci-token}"
-REGISTRY_PASSWORD="${CI_REGISTRY_PASSWORD:-${CI_JOB_TOKEN:-}}"
+# Поэтому в CI сначала пробуем явно залогиниться в registry. Для основного
+# deploy сейчас используется GHCR, а GitLab registry остаётся fallback-ом.
+# В локальном запуске переменных обычно нет, и блок спокойно пропускается.
+REGISTRY_USER="${REGISTRY_USER:-${GHCR_USER:-${CI_REGISTRY_USER:-gitlab-ci-token}}}"
+REGISTRY_PASSWORD="${REGISTRY_PASSWORD:-${GHCR_TOKEN:-${CI_REGISTRY_PASSWORD:-${CI_JOB_TOKEN:-}}}}"
 if [ -n "$REGISTRY_PASSWORD" ]; then
   printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin >/dev/null
 fi

@@ -10,6 +10,7 @@ stages:
   script:
     - export CI_COMMIT_TAG="${CI_COMMIT_TAG:-0.0.0}"
     - docker run --rm `env | grep -o '^CI_[^=]*' | sed 's/^/-e /'`
+      -e REGISTRY_HOST -e REGISTRY_USER -e REGISTRY_PASSWORD -e GHCR_USER -e GHCR_TOKEN
       -v /var/run/docker.sock:/var/run/docker.sock
       -v /root/.docker:/root/.docker
       $(docker build -q -t build/${CI_PROJECT_NAME} -f docker/Dockerfile.build .) 2>&1
@@ -23,4 +24,4 @@ deploy:
   image: docker:27.5.1
   script:
     - docker build -t deploy/${CI_PROJECT_NAME} -f stack/Dockerfile.deploy stack
-    - docker run --rm --env-file <(env | grep -E '^CI_') -e DEPLOY_CONTEXT_ENDPOINT -e GIS_MASTER_SSH_PRIVATE_KEY_B64 -e DEPLOY_SSH_PRIVATE_KEY_B64 -e GIS_MASTER_SSH_PRIVATE_KEY -e DEPLOY_SSH_PRIVATE_KEY -e SSH_PRIVATE_KEY -e CI_SSH_PRIVATE_KEY -e NATS_URL -e NATS_SERVERS -e NATS_SERVICE_URL -e NATS_CONNECTIONS -e NATS_CONNECTIONS_JSON -e NATS_EXTERNAL_NETWORK -e START_BASIC_AGENTS -e START_YOUTRACK_CODEX_AGENT -e YOUTRACK_BASE_URL -e YOUTRACK_OWNER -e YOUTRACK_AGENT_NAME -e YOUTRACK_TOKEN -e YOUTRACK_WEBHOOK_TOKEN -e YOUTRACK_WEBHOOK_PORT -e YOUTRACK_HOOK_CALLBACK_SUBJECT -e YOUTRACK_PUBLIC_WEBHOOK_URL -v /var/run/docker.sock:/var/run/docker.sock -v /root/.docker:/root/.docker -v ssh-agent-socket:/run/ssh-agent:ro deploy/${CI_PROJECT_NAME}
+    - docker run --rm --env-file <(env | grep -E '^CI_') -e DEPLOY_CONTEXT_ENDPOINT -e GIS_MASTER_SSH_PRIVATE_KEY_B64 -e DEPLOY_SSH_PRIVATE_KEY_B64 -e GIS_MASTER_SSH_PRIVATE_KEY -e DEPLOY_SSH_PRIVATE_KEY -e SSH_PRIVATE_KEY -e CI_SSH_PRIVATE_KEY -e REGISTRY_HOST -e REGISTRY_USER -e REGISTRY_PASSWORD -e GHCR_USER -e GHCR_TOKEN -e NATS_URL -e NATS_SERVERS -e NATS_SERVICE_URL -e NATS_CONNECTIONS -e NATS_CONNECTIONS_JSON -e NATS_EXTERNAL_NETWORK -e START_BASIC_AGENTS -e START_YOUTRACK_CODEX_AGENT -e YOUTRACK_BASE_URL -e YOUTRACK_OWNER -e YOUTRACK_AGENT_NAME -e YOUTRACK_TOKEN -e YOUTRACK_WEBHOOK_TOKEN -e YOUTRACK_WEBHOOK_PORT -e YOUTRACK_HOOK_CALLBACK_SUBJECT -e YOUTRACK_PUBLIC_WEBHOOK_URL -v /var/run/docker.sock:/var/run/docker.sock -v /root/.docker:/root/.docker -v ssh-agent-socket:/run/ssh-agent:ro deploy/${CI_PROJECT_NAME}

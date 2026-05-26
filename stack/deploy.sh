@@ -64,10 +64,17 @@ if ! ssh-add -l; then
   exit 1
 fi
 
+REGISTRY_HOST="${REGISTRY_HOST:-ghcr.io}"
+REGISTRY_USER="${REGISTRY_USER:-${GHCR_USER:-}}"
+REGISTRY_PASSWORD="${REGISTRY_PASSWORD:-${GHCR_TOKEN:-}}"
+if [ -n "${REGISTRY_USER}" ] && [ -n "${REGISTRY_PASSWORD}" ]; then
+  printf '%s' "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_HOST}" -u "${REGISTRY_USER}" --password-stdin >/dev/null
+fi
+
 i=0
 until [ "$i" -ge 5 ]; do
   echo "[deploy] dry-stack endpoint ${DEPLOY_CONTEXT_ENDPOINT} (attempt $((i + 1))/5)"
-  if cat nats-synadia-dev.drs | dry-stack swarm_deploy --tls-domain=gis-master.ru -x "${DEPLOY_CONTEXT_ENDPOINT}" -- --prune; then
+  if cat nats-synadia-dev.drs | dry-stack swarm_deploy --tls-domain=gis-master.ru -x "${DEPLOY_CONTEXT_ENDPOINT}" -- --prune --with-registry-auth; then
     exit 0
   fi
 

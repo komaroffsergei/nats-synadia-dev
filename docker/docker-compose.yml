@@ -3,4 +3,4 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: ${REGISTRY_HOST}/trizna/nats-synadia-dev/app/${CI_COMMIT_BRANCH}
+    image: ${REGISTRY_HOST}/komaroffsergei/nats-synadia-dev

@@ -29,7 +29,7 @@ digraph G {
 
   repo [label="GitLab repo\ntrizna/nats-synadia-dev", fillcolor="#dbeafe"];
   build [label="CI build push\nbuild-labels + Docker buildx", fillcolor="#e0f2fe"];
-  registry [label="git.giscloud.ru registry\ntrizna/nats-synadia-dev/app/main", fillcolor="#ecfeff"];
+  registry [label="GHCR\nkomaroffsergei/nats-synadia-dev", fillcolor="#ecfeff"];
   deploy [label="CI deploy\ndry-stack swarm_deploy", fillcolor="#f3e8ff"];
   swarm [label="Docker Swarm\ngis-master.ru", fillcolor="#dcfce7"];
   nats [label="Service: nats\nnats:2.11.6-scratch", fillcolor="#dcfce7"];
