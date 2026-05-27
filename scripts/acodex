@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+SYSTEM_CA="${CODEX_SYSTEM_CA:-/etc/ssl/certs/ca-certificates.crt}"
+MITM_CA="${CODEX_MITM_CA:-$HOME/.codex/ruby-mitm-ca.pem}"
+CA_BUNDLE="${CODEX_CA_BUNDLE:-$HOME/.codex/ca-bundle.pem}"
+
+mkdir -p "$(dirname "$MITM_CA")" "$(dirname "$CA_BUNDLE")"
+
+if [ -n "${CODEX_MITM_CA_B64:-}" ] && [ ! -s "$MITM_CA" ]; then
+  printf '%s' "$CODEX_MITM_CA_B64" | tr -d '\r\n ' | base64 -d > "$MITM_CA"
+fi
+
+if [ ! -s "$CA_BUNDLE" ] && [ -s "$SYSTEM_CA" ]; then
+  if [ -s "$MITM_CA" ]; then
+    cat "$SYSTEM_CA" "$MITM_CA" > "$CA_BUNDLE"
+  else
+    cp "$SYSTEM_CA" "$CA_BUNDLE"
+  fi
+fi
+
+if [ -n "${CODEX_PROXY_URL:-}" ]; then
+  export HTTPS_PROXY="${HTTPS_PROXY:-$CODEX_PROXY_URL}"
+  export HTTP_PROXY="${HTTP_PROXY:-$HTTPS_PROXY}"
+fi
+
+export https_proxy="${https_proxy:-${HTTPS_PROXY:-}}"
+export http_proxy="${http_proxy:-${HTTP_PROXY:-}}"
+
+if [ -s "$CA_BUNDLE" ]; then
+  export SSL_CERT_FILE="${SSL_CERT_FILE:-$CA_BUNDLE}"
+  export GIT_SSL_CAINFO="${GIT_SSL_CAINFO:-$CA_BUNDLE}"
+  export CURL_CA_BUNDLE="${CURL_CA_BUNDLE:-$CA_BUNDLE}"
+  export REQUESTS_CA_BUNDLE="${REQUESTS_CA_BUNDLE:-$CA_BUNDLE}"
+  export NODE_EXTRA_CA_CERTS="${NODE_EXTRA_CA_CERTS:-$CA_BUNDLE}"
+  export npm_config_cafile="${npm_config_cafile:-$CA_BUNDLE}"
+fi
+
+case " ${NODE_OPTIONS:-} " in
+  *" --use-system-ca "*) ;;
+  *) export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--use-system-ca" ;;
+esac
+
+if command -v codex >/dev/null 2>&1; then
+  exec codex "$@"
+fi
+
+if [ -x "$APP_ROOT/node_modules/.bin/codex" ]; then
+  exec "$APP_ROOT/node_modules/.bin/codex" "$@"
+fi
+
+echo "codex executable not found" >&2
+exit 127

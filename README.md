@@ -214,11 +214,27 @@ NATS, Codex SDK и skill file.
 
 ```bash
 OPENAI_API_KEY=<api-key>
+CODEX_PATH_OVERRIDE=/app/scripts/acodex
 CODEX_WORKER_CONCURRENCY=1
 CODEX_SANDBOX_MODE=read-only
 CODEX_APPROVAL_POLICY=never
 CODEX_NETWORK_ACCESS=false
 CODEX_WEB_SEARCH=disabled
+```
+
+`/app/scripts/acodex` - repo-local wrapper вокруг `codex`. Он нужен, чтобы
+Codex CLI внутри SDK запускался с proxy/CA окружением. Для production proxy и
+MITM CA передаются через env, а не хранятся в git:
+
+```bash
+CODEX_PROXY_URL=<proxy-url>
+CODEX_MITM_CA_B64=<base64-encoded-ca-pem>
+```
+
+Локально можно указать пользовательский wrapper:
+
+```bash
+CODEX_PATH_OVERRIDE=/home/komaroff/.local/bin/acodex npm run worker
 ```
 
 Для локальной проверки без модели:

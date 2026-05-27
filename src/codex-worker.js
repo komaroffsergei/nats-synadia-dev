@@ -24,6 +24,8 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(here, "..");
 const SKILL_PATH = resolve(rootDir, env("CODEX_YOUTRACK_SKILL_PATH", "skills/youtrack-task-analysis/SKILL.md"));
+const DEFAULT_CODEX_PATH_OVERRIDE = resolve(rootDir, "scripts/acodex");
+const CODEX_PATH_OVERRIDE = envAny(["CODEX_PATH_OVERRIDE", "ACODEX_PATH", "CODEX_CLI_PATH"], DEFAULT_CODEX_PATH_OVERRIDE);
 const CODEX_DRY_RUN = envFlag("CODEX_DRY_RUN", false);
 const CODEX_MODEL = env("CODEX_MODEL", "");
 const CODEX_REASONING_EFFORT = env("CODEX_REASONING_EFFORT", "medium");
@@ -47,6 +49,7 @@ async function main() {
 
   console.log(`[codex:worker] durable=${CODEX_WORKER_DURABLE} stream=${YT_CODEX_STREAM}`);
   console.log(`[codex:worker] dryRun=${CODEX_DRY_RUN} workingDirectory=${CODEX_WORKING_DIRECTORY}`);
+  console.log(`[codex:worker] codexPath=${CODEX_PATH_OVERRIDE}`);
   if (CODEX_WORKER_CONCURRENCY !== 1) {
     console.warn("[codex:worker] CODEX_WORKER_CONCURRENCY is forced to 1 in this MVP");
   }
@@ -88,6 +91,7 @@ async function main() {
 function createCodexClient() {
   const apiKey = envAny(["CODEX_API_KEY", "OPENAI_API_KEY"], "");
   return new Codex({
+    codexPathOverride: CODEX_PATH_OVERRIDE,
     ...(apiKey ? { apiKey } : {}),
     ...(env("CODEX_BASE_URL", "") ? { baseUrl: env("CODEX_BASE_URL") } : {}),
     env: codexChildEnv(),
@@ -101,13 +105,36 @@ function codexChildEnv() {
   const out = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
-    if (key === "PATH" || key === "HOME" || key === "OPENAI_API_KEY" || key.startsWith("CODEX_")) {
+    if (isAllowedCodexEnv(key)) {
       out[key] = value;
     }
   }
   delete out.YOUTRACK_TOKEN;
   delete out.YT_TOKEN;
   return out;
+}
+
+function isAllowedCodexEnv(key) {
+  return [
+    "PATH",
+    "HOME",
+    "OPENAI_API_KEY",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "https_proxy",
+    "http_proxy",
+    "all_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "GIT_SSL_CAINFO",
+    "CURL_CA_BUNDLE",
+    "REQUESTS_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_OPTIONS",
+    "npm_config_cafile",
+  ].includes(key) || key.startsWith("CODEX_");
 }
 
 async function processJob(js, codex, skill, job) {

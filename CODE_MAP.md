@@ -317,6 +317,9 @@ Service-и:
 | `YOUTRACK_CODEX_SESSION_FIELD` | gateway | Название text custom field для Codex thread id. |
 | `YOUTRACK_AGENT_MESSAGE_SUBJECT` | gateway и UI | NATS subject для webhook bubbles. |
 | `OPENAI_API_KEY` / `CODEX_API_KEY` | worker | Auth для Codex. Не нужен gateway-у. |
+| `CODEX_PATH_OVERRIDE` | worker | Путь к wrapper-у Codex CLI. В production: `/app/scripts/acodex`. |
+| `CODEX_PROXY_URL` | worker | Proxy URL для `scripts/acodex`; хранить только в CI/Vault/env. |
+| `CODEX_MITM_CA_B64` | worker | Base64 PEM CA для proxy/MITM; хранить только в CI/Vault/env. |
 | `CODEX_DRY_RUN` | worker, gateway | Локальный smoke без реального Codex. |
 | `YOUTRACK_DRY_RUN` | gateway | Локальный smoke без записи в YouTrack. |
 | `CODEX_SANDBOX_MODE` | worker | По умолчанию `read-only`. |

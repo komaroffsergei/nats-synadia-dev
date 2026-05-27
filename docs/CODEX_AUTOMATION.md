@@ -9,9 +9,27 @@ production worker использует `@openai/codex-sdk` и как огран�
 
 Для постоянного NATS/JetStream worker-а используется `@openai/codex-sdk`.
 
-`codex exec --json` через локальный wrapper остается полезным для ручной
-диагностики и аварийного one-shot запуска, но не является основным control
-plane для долгоживущего service-а.
+Codex CLI внутри SDK запускается не напрямую, а через wrapper:
+
+```text
+scripts/acodex
+```
+
+Локально можно поставить:
+
+```bash
+CODEX_PATH_OVERRIDE=/home/komaroff/.local/bin/acodex
+```
+
+В production путь по умолчанию:
+
+```bash
+CODEX_PATH_OVERRIDE=/app/scripts/acodex
+```
+
+Wrapper выставляет proxy/CA окружение и затем вызывает `codex`.
+`codex exec --json` через этот же wrapper остается полезным для ручной
+диагностики и аварийного one-shot запуска.
 
 Причина простая: worker уже живет в Node.js, читает JetStream, должен уметь
 продолжать thread, стримить события, отменять turn и явно контролировать env
@@ -64,11 +82,14 @@ CODEX_WORKER_CONCURRENCY=1
 import { Codex } from "@openai/codex-sdk";
 
 const codex = new Codex({
+  codexPathOverride: process.env.CODEX_PATH_OVERRIDE || "/app/scripts/acodex",
   env: {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
     CODEX_HOME: process.env.CODEX_HOME,
+    CODEX_PROXY_URL: process.env.CODEX_PROXY_URL,
+    CODEX_MITM_CA_B64: process.env.CODEX_MITM_CA_B64,
   },
 });
 
@@ -91,11 +112,11 @@ for await (const event of events) {
 
 ## Когда Нужен CLI Fallback
 
-`codex exec --json` полезен, когда надо вручную воспроизвести prompt или
-посмотреть raw JSONL:
+`acodex exec --json` полезен, когда надо вручную воспроизвести prompt или
+посмотреть raw JSONL тем же сетевым путем, что использует worker:
 
 ```bash
-codex exec --json \
+/home/komaroff/.local/bin/acodex exec --json \
   --sandbox read-only \
   --ask-for-approval never \
   --cd /home/komaroff/dev/monitorsoft/synadia-nats-agents \
