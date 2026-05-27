@@ -80,6 +80,23 @@ if [ "${DEPLOY_LOCAL_IMAGE:-false}" = "true" ]; then
   docker save "${APP_IMAGE}" | docker -H "${DEPLOY_CONTEXT_ENDPOINT}" load
 fi
 
+ensure_external_overlay_network() {
+  network_name="$1"
+  if [ -z "${network_name}" ]; then
+    return 0
+  fi
+
+  if docker -H "${DEPLOY_CONTEXT_ENDPOINT}" network inspect "${network_name}" >/dev/null 2>&1; then
+    echo "[deploy] external network ${network_name} already exists"
+    return 0
+  fi
+
+  echo "[deploy] creating external overlay network ${network_name}"
+  docker -H "${DEPLOY_CONTEXT_ENDPOINT}" network create --driver overlay --attachable "${network_name}" >/dev/null
+}
+
+ensure_external_overlay_network "${YOUTRACK_MCP_EXTERNAL_NETWORK:-}"
+
 i=0
 until [ "$i" -ge 5 ]; do
   echo "[deploy] dry-stack endpoint ${DEPLOY_CONTEXT_ENDPOINT} (attempt $((i + 1))/5)"

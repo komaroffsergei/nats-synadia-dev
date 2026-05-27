@@ -1,7 +1,7 @@
 # Карта Кода
 
 Этот документ объясняет, как устроен текущий runtime
-`YouTrack -> JetStream -> Codex worker -> YouTrack comments`.
+`YouTrack webhook -> JetStream -> Codex worker -> yt-mcp-ruby -> YouTrack comments`.
 
 Если нужен короткий обзор и команды запуска, сначала читай
 [README.md](README.md). Здесь собрана подробная карта файлов, алгоритм и
@@ -18,6 +18,7 @@
 - [JetStream](#jetstream)
 - [Deploy](#deploy)
 - [Переменные окружения](#env)
+- [Интеграция с yt-mcp-ruby](docs/YOUTRACK_MCP_INTEGRATION.md)
 - [Что удалено из старой версии](#removed)
 
 <a id="agent-messages"></a>
@@ -67,7 +68,7 @@ NATS-подписку и создавал бы еще один источник 
 - Gateway ставит Codex job в JetStream.
 - `codex_worker` отдельно читает job, запускает или продолжает Codex thread и
   пишет result event.
-- Gateway читает result event и пишет поле/комментарии в YouTrack.
+- Gateway читает result event и пишет поле/комментарии через `yt-mcp-ruby`.
 
 <a id="algorithm"></a>
 ## Пошаговый Алгоритм
@@ -147,7 +148,8 @@ Job не создается для:
 
 ### 5. Gateway Ставит Job В JetStream
 
-Перед постановкой job gateway читает задачу из YouTrack и достает текущее
+Перед постановкой job gateway читает задачу из YouTrack через `yt-mcp-ruby`
+или прямой REST fallback и достает текущее
 значение custom field:
 
 ```text
@@ -207,7 +209,7 @@ youtrack.codex.results.giscloud
 - `analysis_completed` - Codex вернул итоговый анализ;
 - `analysis_failed` - Codex или worker завершился ошибкой.
 
-### 9. Gateway Пишет Результаты В YouTrack
+### 9. Gateway Пишет Результаты В YouTrack Через MCP
 
 Gateway читает results durable consumer-ом:
 
@@ -215,6 +217,15 @@ Gateway читает results durable consumer-ом:
 youtrack-gateway-results
 ```
 
+В production gateway вызывает MCP tools на `yt-mcp-ruby`:
+
+- `update_custom_fields` - записать `Codex Session ID`;
+- `add_issue_comment` - добавить комментарий с результатом;
+- `get_issue`, `get_issue_comments`, `get_custom_fields` - чтение и
+  диагностика.
+
+Прямой REST с `YOUTRACK_TOKEN` оставлен в коде только как локальный fallback,
+если `YOUTRACK_MCP_URL` не задан. Production stack этот token не прокидывает.
 Дальше:
 
 - `session_started` -> записывает `Codex Session ID` и добавляет стартовый
@@ -232,7 +243,8 @@ youtrack-gateway-results
 | --- | --- |
 | [src/common.js](src/common.js) | `.env`, `NATS_URL`, подключение к NATS, JSON helpers, форматирование ошибок. |
 | [src/jetstream.js](src/jetstream.js) | Создание stream `YT_CODEX`, subjects и durable consumers. |
-| [src/youtrack-gateway.js](src/youtrack-gateway.js) | HTTP webhook, Synadia AgentService, YouTrack API, enqueue jobs, обработка results. |
+| [src/youtrack-gateway.js](src/youtrack-gateway.js) | HTTP webhook, Synadia AgentService, YouTrack MCP/REST integration, enqueue jobs, обработка results. |
+| [src/youtrack-mcp-client.js](src/youtrack-mcp-client.js) | Минимальный MCP Streamable HTTP client: `initialize`, `tools/list`, `tools/call`, JSON/SSE parsing. |
 | [src/codex-worker.js](src/codex-worker.js) | Отдельный worker для Codex jobs. |
 | [src/monitor.js](src/monitor.js) | Локальный монитор NATS traffic. |
 | [skills/youtrack-task-analysis/SKILL.md](skills/youtrack-task-analysis/SKILL.md) | Инструкция анализа YouTrack задачи для Codex. |
@@ -300,7 +312,8 @@ Deploy описан в:
 Service-и:
 
 - `nats` - NATS с `-js`;
-- `app` - публичный service, UI + gateway, получает `YOUTRACK_TOKEN`;
+- `app` - публичный service, UI + gateway, получает `YOUTRACK_MCP_URL`; прямой
+  `YOUTRACK_TOKEN` в stack не прокидывается;
 - `codex_worker` - отдельный worker, получает OpenAI/Codex env, но не получает
   `YOUTRACK_TOKEN`.
 
@@ -328,7 +341,10 @@ Service-и:
 | `NATS_URL` | все процессы | Основная NATS-шина. |
 | `NATS_URLS_JSON` | UI | Дополнительные NATS-шины только для discovery. |
 | `YOUTRACK_BASE_URL` | gateway | База YouTrack API. |
-| `YOUTRACK_TOKEN` | gateway | Permanent token YouTrack. Не передавать worker-у. |
+| `YOUTRACK_MCP_URL` | gateway | Внутренний URL `yt-mcp-ruby`, например `http://yt-mcp-ruby_app:9292`. Если задан, прямой YouTrack token не нужен. |
+| `YOUTRACK_MCP_EXTERNAL_NETWORK` | deploy | Имя внешней Swarm overlay network, общей для `synadia-nats-agents` и `yt-mcp-ruby`. |
+| `YOUTRACK_API_CHECK_PROJECT` | gateway | Project shortName для проверки custom fields, например `CS`. |
+| `YOUTRACK_TOKEN` | gateway | Локальный direct REST fallback. Production stack его не прокидывает; worker его тоже не получает. |
 | `YOUTRACK_WEBHOOK_TOKEN` | gateway | Опциональная проверка webhook request-а. |
 | `YOUTRACK_CODEX_SESSION_FIELD` | gateway | Название text custom field для Codex thread id. |
 | `YOUTRACK_AGENT_MESSAGE_SUBJECT` | gateway и UI | NATS subject для webhook bubbles. |

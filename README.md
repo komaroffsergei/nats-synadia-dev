@@ -10,6 +10,8 @@ YouTrack webhook
   -> job в NATS JetStream
   -> отдельный Codex worker
   -> result event в NATS JetStream
+  -> gateway
+  -> yt-mcp-ruby MCP HTTP
   -> комментарии и поле Codex Session ID в YouTrack
 ```
 
@@ -30,6 +32,7 @@ JetStream. Codex не запускается внутри webhook handler-а.
 - [Проверки перед push](#checks)
 - [Подробная карта кода](CODE_MAP.md)
 - [Как worker запускает Codex](docs/CODEX_AUTOMATION.md)
+- [Интеграция с yt-mcp-ruby](docs/YOUTRACK_MCP_INTEGRATION.md)
 - [README Web UI](examples/agent-web-ui/README.md)
 
 <a id="purpose"></a>
@@ -51,7 +54,9 @@ agents.prompt.youtrack.giscloud.codex
 Ключевые файлы:
 
 - [src/youtrack-gateway.js](src/youtrack-gateway.js) - HTTP webhook, YouTrack
-  API client, публикация chat message, постановка jobs, обработка results.
+  MCP/REST client, публикация chat message, постановка jobs, обработка results.
+- [src/youtrack-mcp-client.js](src/youtrack-mcp-client.js) - минимальный
+  Streamable HTTP JSON-RPC client для `yt-mcp-ruby`.
 - [src/codex-worker.js](src/codex-worker.js) - последовательный Codex worker.
 - [src/jetstream.js](src/jetstream.js) - stream, subjects и durable consumers.
 - [skills/youtrack-task-analysis/SKILL.md](skills/youtrack-task-analysis/SKILL.md)
@@ -92,7 +97,7 @@ https://nats-synadia-dev.gis-master.ru
 | Endpoint | Метод | Назначение |
 | --- | --- | --- |
 | `/healthz` | `GET` | Проверяет UI, NATS, gateway и JetStream consumers. |
-| `/youtrack/api-check` | `GET` | Проверяет YouTrack token, comments API, поле `Codex Session ID` и JetStream. |
+| `/youtrack/api-check` | `GET` | Проверяет интеграцию с YouTrack через `yt-mcp-ruby` или REST fallback, comments API, поле `Codex Session ID` и JetStream. |
 | `/youtrack/webhook` | `POST` | Единственный публичный webhook endpoint для YouTrack. |
 | `/youtrack/webhooks/last` | `GET` | Последние принятые webhook-и в памяти gateway. |
 | `/youtrack/jobs/last` | `GET` | Последние jobs/results в памяти gateway. |
@@ -187,17 +192,28 @@ curl -sS http://127.0.0.1:3401/youtrack/jobs/last | jq
 <a id="youtrack"></a>
 ## YouTrack
 
-Production gateway требует permanent token:
+Production gateway должен ходить в YouTrack через внутренний `yt-mcp-ruby`.
+Тогда в этом проекте `YOUTRACK_TOKEN` не нужен: token остается только в
+деплойменте `yt-mcp-ruby`, а `synadia-nats-agents` получает только URL MCP
+сервиса.
 
 ```bash
-YOUTRACK_TOKEN=<token>
 YOUTRACK_BASE_URL=https://yt.giscloud.ru
+YOUTRACK_MCP_URL=http://yt-mcp-ruby_app:9292
+YOUTRACK_MCP_EXTERNAL_NETWORK=yt-mcp-ruby-internal
+YOUTRACK_API_CHECK_PROJECT=CS
 YOUTRACK_CODEX_SESSION_FIELD='Codex Session ID'
 ```
 
+`YOUTRACK_TOKEN` остается поддержан в коде как прямой REST fallback для
+локальной диагностики без `yt-mcp-ruby`, но production stack его не прокидывает.
+
 `/youtrack/api-check` проверяет:
 
-- bearer token;
+- режим интеграции: `mcp`, `rest` или `dry-run`;
+- наличие нужных MCP tools: `get_issue`, `search_issues`,
+  `get_issue_comments`, `get_custom_fields`, `update_custom_fields`,
+  `add_issue_comment`;
 - чтение задач;
 - comments API;
 - наличие custom field `Codex Session ID`;
@@ -276,7 +292,8 @@ CODEX_DRY_RUN=true npm run worker
 
 Один Docker image используется двумя app-процессами:
 
-- `app` - Bun UI + YouTrack gateway. Получает `YOUTRACK_TOKEN`.
+- `app` - Bun UI + YouTrack gateway. В production получает
+  `YOUTRACK_MCP_URL`; `YOUTRACK_TOKEN` в stack не прокидывается.
 - `codex_worker` - только `node src/codex-worker.js`. Получает OpenAI/Codex env,
   но не получает `YOUTRACK_TOKEN`.
 
@@ -294,6 +311,16 @@ push в main
 ```bash
 curl -sS https://nats-synadia-dev.gis-master.ru/healthz | jq
 curl -sS https://nats-synadia-dev.gis-master.ru/youtrack/api-check | jq
+```
+
+Для production без YouTrack token в этом проекте `/youtrack/api-check` должен
+показывать:
+
+```json
+{
+  "mode": "mcp",
+  "token": "not_required_mcp"
+}
 ```
 
 <a id="diagrams"></a>

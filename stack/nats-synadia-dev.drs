@@ -6,12 +6,18 @@ DEFAULT_NATS_URL = 'nats://nats-synadia-dev_nats:4222'
 NATS_URL = ENV['NATS_URL'] || DEFAULT_NATS_URL
 NATS_URLS_JSON = ENV['NATS_URLS_JSON']
 NATS_EXTERNAL_NETWORK = ENV['NATS_EXTERNAL_NETWORK']
+YOUTRACK_MCP_URL = ENV['YOUTRACK_MCP_URL'] || ''
+YOUTRACK_MCP_EXTERNAL_NETWORK = ENV['YOUTRACK_MCP_EXTERNAL_NETWORK']
 YOUTRACK_PUBLIC_WEBHOOK_URL = ENV['YOUTRACK_PUBLIC_WEBHOOK_URL'] || 'https://nats-synadia-dev.gis-master.ru/youtrack/webhook'
 
 Network :demo_internal
 
 if NATS_EXTERNAL_NETWORK && !NATS_EXTERNAL_NETWORK.empty?
   Network :nats_external, external: true, name: NATS_EXTERNAL_NETWORK
+end
+
+if YOUTRACK_MCP_EXTERNAL_NETWORK && !YOUTRACK_MCP_EXTERNAL_NETWORK.empty?
+  Network :youtrack_mcp_external, external: true, name: YOUTRACK_MCP_EXTERNAL_NETWORK
 end
 
 Service :nats, image: 'nats:2.11.6-scratch' do
@@ -23,15 +29,18 @@ Service :app, image: APP_IMAGE do
   ingress host: HOST, port: 3300
   network :demo_internal
   network :nats_external if NATS_EXTERNAL_NETWORK && !NATS_EXTERNAL_NETWORK.empty?
+  network :youtrack_mcp_external if YOUTRACK_MCP_EXTERNAL_NETWORK && !YOUTRACK_MCP_EXTERNAL_NETWORK.empty?
 
   env HOST: '0.0.0.0',
       PORT: '3300',
       NATS_URL: NATS_URL,
       NATS_URLS_JSON: NATS_URLS_JSON || '',
       YOUTRACK_BASE_URL: ENV['YOUTRACK_BASE_URL'] || 'https://yt.giscloud.ru',
+      YOUTRACK_MCP_URL: YOUTRACK_MCP_URL,
+      YOUTRACK_MCP_TIMEOUT_MS: ENV['YOUTRACK_MCP_TIMEOUT_MS'] || ENV['YOUTRACK_TIMEOUT_MS'] || '15000',
+      YOUTRACK_API_CHECK_PROJECT: ENV['YOUTRACK_API_CHECK_PROJECT'] || '',
       YOUTRACK_OWNER: ENV['YOUTRACK_OWNER'] || 'giscloud',
       YOUTRACK_AGENT_NAME: ENV['YOUTRACK_AGENT_NAME'] || 'codex',
-      YOUTRACK_TOKEN: ENV['YOUTRACK_TOKEN'] || '',
       YOUTRACK_WEBHOOK_TOKEN: ENV['YOUTRACK_WEBHOOK_TOKEN'] || '',
       YOUTRACK_WEBHOOK_HOST: '127.0.0.1',
       YOUTRACK_WEBHOOK_PORT: ENV['YOUTRACK_WEBHOOK_PORT'] || '3401',

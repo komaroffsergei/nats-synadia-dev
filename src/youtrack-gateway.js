@@ -20,6 +20,7 @@ import {
   jetStreamReadiness,
   openJetStream,
 } from "./jetstream.js";
+import { YouTrackMcpClient } from "./youtrack-mcp-client.js";
 
 const YOUTRACK_AGENT = "youtrack";
 const YOUTRACK_OWNER = env("YOUTRACK_OWNER", "giscloud");
@@ -27,6 +28,8 @@ const YOUTRACK_NAME = env("YOUTRACK_AGENT_NAME", "codex");
 const YOUTRACK_BASE_URL = env("YOUTRACK_BASE_URL", "https://yt.giscloud.ru");
 const YOUTRACK_TOKEN = envAny(["YOUTRACK_TOKEN", "YT_TOKEN"], "");
 const YOUTRACK_TIMEOUT_MS = Number(env("YOUTRACK_TIMEOUT_MS", "15000"));
+const YOUTRACK_MCP_URL = envAny(["YOUTRACK_MCP_URL", "YT_MCP_URL"], "");
+const YOUTRACK_MCP_TIMEOUT_MS = Number(env("YOUTRACK_MCP_TIMEOUT_MS", String(YOUTRACK_TIMEOUT_MS)));
 const YOUTRACK_DRY_RUN = envFlag("YOUTRACK_DRY_RUN", envFlag("CODEX_DRY_RUN", false));
 const WEBHOOK_HOST = env("YOUTRACK_WEBHOOK_HOST", "0.0.0.0");
 const WEBHOOK_PORT = Number(env("YOUTRACK_WEBHOOK_PORT", env("PORT", "3401")));
@@ -37,8 +40,15 @@ const MAX_EVENTS = Number(env("YOUTRACK_WEBHOOK_MAX_EVENTS", "50"));
 const AGENT_MESSAGE_SUBJECT = env("YOUTRACK_AGENT_MESSAGE_SUBJECT", `youtrack.messages.${YOUTRACK_OWNER}.${YOUTRACK_NAME}`);
 const CODEX_SESSION_FIELD = env("YOUTRACK_CODEX_SESSION_FIELD", "Codex Session ID");
 const API_CHECK_ISSUE = env("YOUTRACK_API_CHECK_ISSUE", "");
+const API_CHECK_PROJECT = env("YOUTRACK_API_CHECK_PROJECT", "");
 const MUTE_NOTIFICATIONS = envFlag("YOUTRACK_MUTE_NOTIFICATIONS", false);
 const PROMPT_SUBJECT = `agents.prompt.${YOUTRACK_AGENT}.${YOUTRACK_OWNER}.${YOUTRACK_NAME}`;
+const youtrackMcp = new YouTrackMcpClient({
+  url: YOUTRACK_MCP_URL,
+  timeoutMs: YOUTRACK_MCP_TIMEOUT_MS,
+  clientName: "synadia-nats-agents",
+  clientVersion: SERVICE_VERSION,
+});
 
 const recentWebhookEvents = [];
 const recentJobs = [];
@@ -47,6 +57,21 @@ const dryIssues = new Map();
 
 function baseUrl() {
   return YOUTRACK_BASE_URL.replace(/\/+$/, "");
+}
+
+function useYouTrackMcp() {
+  return !YOUTRACK_DRY_RUN && youtrackMcp.enabled;
+}
+
+function youtrackMode() {
+  if (YOUTRACK_DRY_RUN) return "dry-run";
+  return useYouTrackMcp() ? "mcp" : "rest";
+}
+
+function youtrackAccessStatus() {
+  if (YOUTRACK_DRY_RUN) return "not_required_dry_run";
+  if (useYouTrackMcp()) return "not_required_mcp";
+  return YOUTRACK_TOKEN ? "set" : "missing";
 }
 
 function requireYouTrackToken() {
@@ -221,6 +246,7 @@ async function enqueueCodexJob(js, event) {
 
 async function readIssueForJob(issueId, webhookPayload) {
   if (YOUTRACK_DRY_RUN) return dryIssue(issueId, webhookPayload);
+  if (useYouTrackMcp()) return youtrackMcp.callTool("get_issue", { issue_id: issueId });
   const fields = [
     "id",
     "idReadable",
@@ -272,6 +298,15 @@ async function writeCodexSessionId(issueId, sessionId) {
     else issue.customFields.push({ name: CODEX_SESSION_FIELD, $type: "TextIssueCustomField", value });
     return;
   }
+  if (useYouTrackMcp()) {
+    await youtrackMcp.callTool("update_custom_fields", {
+      issue_id: issueId,
+      custom_fields: {
+        [CODEX_SESSION_FIELD]: sessionId,
+      },
+    });
+    return;
+  }
 
   await youtrackJson(`/api/issues/${encodeURIComponent(issueId)}`, {
     method: "POST",
@@ -300,6 +335,13 @@ async function addIssueComment(issueId, text) {
       id: `dry-comment-${Date.now()}`,
       text: bodyText,
       created: Date.now(),
+    });
+    return;
+  }
+  if (useYouTrackMcp()) {
+    await youtrackMcp.callTool("add_issue_comment", {
+      issue_id: issueId,
+      text: bodyText,
     });
     return;
   }
@@ -451,6 +493,12 @@ async function handleHttp(req, context) {
           results: recentResults.length,
         },
         jetstream: jetstreamStatus,
+        youtrack: {
+          mode: youtrackMode(),
+          baseUrl: YOUTRACK_BASE_URL,
+          mcpUrl: YOUTRACK_MCP_URL || null,
+          access: youtrackAccessStatus(),
+        },
         dryRun: YOUTRACK_DRY_RUN,
       }, jetstreamStatus.ok ? 200 : 503);
     }
@@ -500,8 +548,10 @@ async function checkYouTrackApi(nc) {
   if (YOUTRACK_DRY_RUN) {
     return {
       ok: jetstreamStatus.ok,
+      mode: youtrackMode(),
       baseUrl: YOUTRACK_BASE_URL,
-      token: YOUTRACK_TOKEN ? "set" : "missing",
+      mcpUrl: YOUTRACK_MCP_URL || null,
+      token: youtrackAccessStatus(),
       dryRun: true,
       checks,
     };
@@ -516,6 +566,19 @@ async function checkYouTrackApi(nc) {
       checks.push({ label, ok: false, error: formatError(error) });
       return null;
     }
+  }
+
+  if (useYouTrackMcp()) {
+    await checkYouTrackMcp(checks, check);
+    return {
+      ok: checks.every((item) => item.ok),
+      mode: "mcp",
+      baseUrl: YOUTRACK_BASE_URL,
+      mcpUrl: YOUTRACK_MCP_URL,
+      token: "not_required_mcp",
+      dryRun: false,
+      checks,
+    };
   }
 
   await check("auth_api_me", () => youtrackJson("/api/users/me", {
@@ -561,11 +624,85 @@ async function checkYouTrackApi(nc) {
 
   return {
     ok: checks.every((item) => item.ok),
+    mode: "rest",
     baseUrl: YOUTRACK_BASE_URL,
     token: YOUTRACK_TOKEN ? "set" : "missing",
     dryRun: false,
     checks,
   };
+}
+
+async function checkYouTrackMcp(checks, check) {
+  await check("mcp_tools", async () => {
+    const result = await youtrackMcp.listTools();
+    const names = Array.isArray(result?.tools) ? result.tools.map((tool) => tool.name).filter(Boolean) : [];
+    const required = [
+      "get_current_user",
+      "search_issues",
+      "get_issue",
+      "get_issue_comments",
+      "get_custom_fields",
+      "update_custom_fields",
+      "add_issue_comment",
+    ];
+    const missing = required.filter((name) => !names.includes(name));
+    if (missing.length) throw new Error(`yt-mcp-ruby tools are disabled: ${missing.join(", ")}`);
+    return { count: names.length, required };
+  });
+
+  await check("mcp_current_user", () => youtrackMcp.callTool("get_current_user"));
+  const issues = await check("mcp_search_top1", () => youtrackMcp.callTool("search_issues", {
+    query: "",
+    top: 1,
+  }));
+  const targetIssue = API_CHECK_ISSUE || firstIssueId(issues);
+  if (!targetIssue) {
+    checks.push({ label: "mcp_comments_api", ok: false, error: "no accessible issue to check comments API" });
+    checks.push({ label: "mcp_codex_session_field", ok: false, error: "no accessible issue to check custom field" });
+    return;
+  }
+
+  await check("mcp_comments_api", () => youtrackMcp.callTool("get_issue_comments", {
+    issue_id: targetIssue,
+    top: 1,
+  }));
+
+  const issue = await check("mcp_codex_session_field", () => youtrackMcp.callTool("get_issue", {
+    issue_id: targetIssue,
+  }));
+  if (issue) checkCodexSessionField(checks, issue);
+
+  const project = API_CHECK_PROJECT || issue?.project?.shortName || projectFromIssueId(targetIssue);
+  if (project) {
+    await check("mcp_custom_fields", () => youtrackMcp.callTool("get_custom_fields", { project }));
+  } else {
+    checks.push({ label: "mcp_custom_fields", ok: false, error: "project is unknown" });
+  }
+}
+
+function firstIssueId(value) {
+  const issue = Array.isArray(value) ? value[0] : null;
+  return issue ? String(issue.idReadable || issue.id || "") : "";
+}
+
+function projectFromIssueId(issueId) {
+  const match = String(issueId || "").match(/^([A-Z][A-Z0-9_]*)-/i);
+  return match ? match[1] : "";
+}
+
+function checkCodexSessionField(checks, issue) {
+  const field = (issue.customFields || []).find((item) => item.name === CODEX_SESSION_FIELD);
+  if (!field) {
+    checks.push({ label: "codex_session_field_exists", ok: false, error: `${CODEX_SESSION_FIELD} is missing` });
+  } else if (field.$type !== "TextIssueCustomField") {
+    checks.push({
+      label: "codex_session_field_type",
+      ok: false,
+      error: `${CODEX_SESSION_FIELD} must be TextIssueCustomField, got ${field.$type || "(unknown)"}`,
+    });
+  } else {
+    checks.push({ label: "codex_session_field_type", ok: true, details: { type: field.$type } });
+  }
 }
 
 async function youtrackJson(path, { method = "GET", params = {}, body } = {}) {
@@ -629,6 +766,12 @@ async function handlePrompt(envelope, response, nc) {
       jetstream: readiness,
       recentJobs: recentJobs.slice(0, 5),
       recentResults: recentResults.slice(0, 5),
+      youtrack: {
+        mode: youtrackMode(),
+        baseUrl: YOUTRACK_BASE_URL,
+        mcpUrl: YOUTRACK_MCP_URL || null,
+        access: youtrackAccessStatus(),
+      },
       dryRun: YOUTRACK_DRY_RUN,
     }, null, 2));
     return;
@@ -670,7 +813,9 @@ async function main() {
     description: "YouTrack webhook gateway for Codex task analysis.",
     extraMetadata: {
       role: "youtrack-codex-gateway",
-      base_url: YOUTRACK_BASE_URL,
+      youtrack_mode: youtrackMode(),
+      youtrack_base_url: YOUTRACK_BASE_URL,
+      youtrack_mcp_url: YOUTRACK_MCP_URL || "",
       webhook_path: "/youtrack/webhook",
       message_subject: AGENT_MESSAGE_SUBJECT,
       job_subject: YT_CODEX_JOB_SUBJECT,
@@ -701,7 +846,7 @@ async function main() {
   console.log(`[youtrack:gateway] webhook=http://${WEBHOOK_HOST}:${WEBHOOK_PORT}/youtrack/webhook`);
   console.log(`[youtrack:gateway] message subject=${AGENT_MESSAGE_SUBJECT}`);
   console.log(`[youtrack:gateway] jobs=${YT_CODEX_JOB_SUBJECT} results=${YT_CODEX_RESULT_SUBJECT}`);
-  console.log(`[youtrack:gateway] base=${YOUTRACK_BASE_URL} token=${YOUTRACK_TOKEN ? "set" : "missing"} dryRun=${YOUTRACK_DRY_RUN}`);
+  console.log(`[youtrack:gateway] mode=${youtrackMode()} base=${YOUTRACK_BASE_URL} mcp=${YOUTRACK_MCP_URL || "(unset)"} access=${youtrackAccessStatus()} dryRun=${YOUTRACK_DRY_RUN}`);
 
   const stop = async () => {
     stopResultConsumer();
