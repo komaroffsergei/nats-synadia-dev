@@ -320,6 +320,7 @@ Service-и:
 | `CODEX_PATH_OVERRIDE` | worker | Путь к wrapper-у Codex CLI. В production: `/app/scripts/acodex`. |
 | `CODEX_PROXY_URL` | worker | Proxy URL для `scripts/acodex`; хранить только в CI/Vault/env. |
 | `CODEX_MITM_CA_B64` | worker | Base64 PEM CA для proxy/MITM; хранить только в CI/Vault/env. |
+| `CODEX_AUTH_JSON_B64` | worker | Base64 `~/.codex/auth.json`, если worker работает через Codex CLI auth вместо API key. Хранить только в CI/Vault/env. |
 | `CODEX_DRY_RUN` | worker, gateway | Локальный smoke без реального Codex. |
 | `YOUTRACK_DRY_RUN` | gateway | Локальный smoke без записи в YouTrack. |
 | `CODEX_SANDBOX_MODE` | worker | По умолчанию `read-only`. |

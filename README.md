@@ -231,6 +231,14 @@ CODEX_PROXY_URL=<proxy-url>
 CODEX_MITM_CA_B64=<base64-encoded-ca-pem>
 ```
 
+Если в deploy нет `OPENAI_API_KEY` или `CODEX_API_KEY`, можно передать auth
+локального Codex CLI как `CODEX_AUTH_JSON_B64`. Wrapper запишет его в
+`$HOME/.codex/auth.json` внутри контейнера перед запуском `codex`:
+
+```bash
+CODEX_AUTH_JSON_B64=<base64-encoded-codex-auth-json>
+```
+
 Локально можно указать пользовательский wrapper:
 
 ```bash

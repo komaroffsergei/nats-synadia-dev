@@ -58,6 +58,7 @@ Service :codex_worker, image: APP_IMAGE do
       HTTP_PROXY: ENV['HTTP_PROXY'] || ENV['HTTPS_PROXY'] || ENV['CODEX_PROXY_URL'] || ENV['WARD_PROXY_URL'] || '',
       NO_PROXY: ENV['NO_PROXY'] || '',
       CODEX_MITM_CA_B64: ENV['CODEX_MITM_CA_B64'] || '',
+      CODEX_AUTH_JSON_B64: ENV['CODEX_AUTH_JSON_B64'] || '',
       CODEX_CA_BUNDLE: ENV['CODEX_CA_BUNDLE'] || '/root/.codex/ca-bundle.pem',
       CODEX_BASE_URL: ENV['CODEX_BASE_URL'] || '',
       CODEX_MODEL: ENV['CODEX_MODEL'] || '',

@@ -31,6 +31,16 @@ Wrapper выставляет proxy/CA окружение и затем вызы�
 `codex exec --json` через этот же wrapper остается полезным для ручной
 диагностики и аварийного one-shot запуска.
 
+Если worker не получает `OPENAI_API_KEY` или `CODEX_API_KEY`, wrapper может
+поднять Codex CLI auth из env:
+
+```bash
+CODEX_AUTH_JSON_B64=<base64-encoded-codex-auth-json>
+```
+
+Значение не хранится в репозитории: его надо передавать только через
+CI/Vault/runtime env.
+
 Причина простая: worker уже живет в Node.js, читает JetStream, должен уметь
 продолжать thread, стримить события, отменять turn и явно контролировать env
 дочернего процесса. SDK лучше подходит для этой формы.
@@ -42,7 +52,7 @@ SDK запускает Codex как дочерний процесс и обща�
 
 Поэтому остаются важными:
 
-- auth через `OPENAI_API_KEY` или `CODEX_API_KEY`;
+- auth через `OPENAI_API_KEY`, `CODEX_API_KEY` или `CODEX_AUTH_JSON_B64`;
 - доступность Codex CLI в окружении;
 - `CODEX_HOME`, proxy/CA и другие настройки рабочего места;
 - `workingDirectory`;
@@ -90,6 +100,7 @@ const codex = new Codex({
     CODEX_HOME: process.env.CODEX_HOME,
     CODEX_PROXY_URL: process.env.CODEX_PROXY_URL,
     CODEX_MITM_CA_B64: process.env.CODEX_MITM_CA_B64,
+    CODEX_AUTH_JSON_B64: process.env.CODEX_AUTH_JSON_B64,
   },
 });
 

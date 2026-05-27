@@ -7,8 +7,15 @@ APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SYSTEM_CA="${CODEX_SYSTEM_CA:-/etc/ssl/certs/ca-certificates.crt}"
 MITM_CA="${CODEX_MITM_CA:-$HOME/.codex/ruby-mitm-ca.pem}"
 CA_BUNDLE="${CODEX_CA_BUNDLE:-$HOME/.codex/ca-bundle.pem}"
+CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
+AUTH_JSON="${CODEX_AUTH_JSON:-$CODEX_HOME_DIR/auth.json}"
 
-mkdir -p "$(dirname "$MITM_CA")" "$(dirname "$CA_BUNDLE")"
+mkdir -p "$(dirname "$MITM_CA")" "$(dirname "$CA_BUNDLE")" "$CODEX_HOME_DIR"
+
+if [ -n "${CODEX_AUTH_JSON_B64:-}" ] && [ ! -s "$AUTH_JSON" ]; then
+  printf '%s' "$CODEX_AUTH_JSON_B64" | tr -d '\r\n ' | base64 -d > "$AUTH_JSON"
+  chmod 600 "$AUTH_JSON"
+fi
 
 if [ -n "${CODEX_MITM_CA_B64:-}" ] && [ ! -s "$MITM_CA" ]; then
   printf '%s' "$CODEX_MITM_CA_B64" | tr -d '\r\n ' | base64 -d > "$MITM_CA"
