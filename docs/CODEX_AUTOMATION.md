@@ -45,6 +45,59 @@ CI/Vault/runtime env.
 продолжать thread, стримить события, отменять turn и явно контролировать env
 дочернего процесса. SDK лучше подходит для этой формы.
 
+## Как `acodex` Перенесен В Контейнер
+
+Локальный wrapper `/home/komaroff/.local/bin/acodex` не копируется в Docker
+image. Вместо этого в репозитории есть [scripts/acodex](../scripts/acodex):
+это production-версия wrapper-а без локальных секретов.
+
+Цепочка запуска такая:
+
+```text
+docker/Dockerfile
+  -> COPY . .
+  -> /app/scripts/acodex внутри image
+  -> stack/nats-synadia-dev.drs: CODEX_PATH_OVERRIDE=/app/scripts/acodex
+  -> src/codex-worker.js: new Codex({ codexPathOverride })
+  -> @openai/codex-sdk
+  -> /app/scripts/acodex exec --experimental-json ...
+  -> codex
+```
+
+Что хранится в git:
+
+- `scripts/acodex` - shell wrapper;
+- настройка `CODEX_PATH_OVERRIDE=/app/scripts/acodex`;
+- список env-переменных, которые можно передать в worker.
+
+Что не хранится в git:
+
+- proxy login/password;
+- `~/.codex/auth.json`;
+- MITM CA как секретное runtime-значение;
+- OpenAI/Codex tokens.
+
+Эти значения передаются через GitLab CI variables, Vault или runtime env:
+
+```bash
+CODEX_PROXY_URL=<proxy-url>
+CODEX_MITM_CA_B64=<base64-encoded-ca-pem>
+CODEX_AUTH_JSON_B64=<base64-encoded-codex-auth-json>
+```
+
+При старте wrapper:
+
+1. создает `$HOME/.codex/auth.json` из `CODEX_AUTH_JSON_B64`;
+2. создает `$HOME/.codex/ruby-mitm-ca.pem` из `CODEX_MITM_CA_B64`;
+3. собирает `$HOME/.codex/ca-bundle.pem`;
+4. выставляет `HTTPS_PROXY`, `HTTP_PROXY`, `SSL_CERT_FILE`,
+   `NODE_EXTRA_CA_CERTS`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE` и другие TLS
+   переменные;
+5. заменяет себя реальным процессом `codex`.
+
+Так worker получает поведение `acodex`, но image остается переносимым и не
+содержит персональных файлов с этой машины.
+
 ## Важная Деталь Про SDK
 
 `@openai/codex-sdk` не заменяет локальный Codex CLI отдельным удаленным API.

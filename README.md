@@ -239,6 +239,26 @@ CODEX_MITM_CA_B64=<base64-encoded-ca-pem>
 CODEX_AUTH_JSON_B64=<base64-encoded-codex-auth-json>
 ```
 
+### Как `acodex` попадает в production
+
+В контейнер не копируется личный файл `/home/komaroff/.local/bin/acodex`.
+В репозитории есть собственный wrapper [scripts/acodex](scripts/acodex),
+который повторяет нужную production-логику:
+
+1. Docker image делает `COPY . .`, поэтому wrapper оказывается внутри image как
+   `/app/scripts/acodex`.
+2. `codex_worker` получает `CODEX_PATH_OVERRIDE=/app/scripts/acodex`.
+3. `@openai/codex-sdk` запускает не Codex CLI напрямую, а этот wrapper через
+   `codexPathOverride`.
+4. Wrapper на старте создает временное runtime-окружение: пишет
+   `$HOME/.codex/auth.json` из `CODEX_AUTH_JSON_B64`, пишет MITM CA из
+   `CODEX_MITM_CA_B64`, собирает CA bundle и выставляет proxy из
+   `CODEX_PROXY_URL`.
+5. После подготовки wrapper делает `exec codex "$@"`.
+
+Секреты живут только в CI/Vault/runtime env. В git попадает только сам wrapper и
+описание того, какие переменные он читает.
+
 Локально можно указать пользовательский wrapper:
 
 ```bash

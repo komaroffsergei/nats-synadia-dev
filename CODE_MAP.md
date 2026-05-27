@@ -304,6 +304,22 @@ Service-и:
 - `codex_worker` - отдельный worker, получает OpenAI/Codex env, но не получает
   `YOUTRACK_TOKEN`.
 
+Как `acodex` попадает в worker:
+
+1. [docker/Dockerfile](docker/Dockerfile) копирует репозиторий в image через
+   `COPY . .`, поэтому [scripts/acodex](scripts/acodex) становится
+   `/app/scripts/acodex`.
+2. [stack/nats-synadia-dev.drs](stack/nats-synadia-dev.drs) задает
+   `CODEX_PATH_OVERRIDE=/app/scripts/acodex` для service-а `codex_worker`.
+3. [src/codex-worker.js](src/codex-worker.js) передает этот путь в
+   `new Codex({ codexPathOverride })`.
+4. SDK запускает `/app/scripts/acodex`, wrapper готовит runtime auth/proxy/CA и
+   затем делает `exec codex "$@"`.
+
+Локальный файл `/home/komaroff/.local/bin/acodex` в image не копируется.
+Секреты передаются только через CI/Vault/runtime env: `CODEX_PROXY_URL`,
+`CODEX_MITM_CA_B64`, `CODEX_AUTH_JSON_B64`.
+
 <a id="env"></a>
 ## Переменные Окружения
 
