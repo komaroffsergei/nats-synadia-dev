@@ -164,6 +164,20 @@ async function processJob(js, codex, skill, job) {
     return;
   }
 
+  if (job.sessionId) {
+    try {
+      await runCodexThread(js, codex, skill, job);
+      return;
+    } catch (error) {
+      if (!isMissingCodexThreadError(error)) throw error;
+      console.warn(`[codex:worker] cannot resume ${job.sessionId}; starting a new thread`);
+    }
+  }
+
+  await runCodexThread(js, codex, skill, { ...job, sessionId: "" });
+}
+
+async function runCodexThread(js, codex, skill, job) {
   const thread = job.sessionId
     ? codex.resumeThread(job.sessionId, threadOptions())
     : codex.startThread(threadOptions());
@@ -221,6 +235,11 @@ async function processJob(js, codex, skill, job) {
     items: summarizeItemsForResult(items),
     completedAt: nowIso(),
   });
+}
+
+function isMissingCodexThreadError(error) {
+  const message = formatError(error).toLowerCase();
+  return message.includes("thread/resume failed") && message.includes("no rollout found");
 }
 
 function validateJob(job) {
