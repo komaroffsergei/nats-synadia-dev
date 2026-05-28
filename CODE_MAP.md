@@ -341,7 +341,7 @@ Service-и:
 | `NATS_URL` | все процессы | Основная NATS-шина. |
 | `NATS_URLS_JSON` | UI | Дополнительные NATS-шины только для discovery. |
 | `YOUTRACK_BASE_URL` | gateway | База YouTrack API. |
-| `YOUTRACK_MCP_URL` | gateway | Внутренний URL `yt-mcp-ruby`, например `http://yt-mcp-ruby_app:9292`. Если задан, прямой YouTrack token не нужен. |
+| `YOUTRACK_MCP_URL` | gateway | Внутренний URL `yt-mcp-ruby`, например `http://agents_yt_mcp_ruby:9292`. Если задан, прямой YouTrack token не нужен. |
 | `YOUTRACK_MCP_EXTERNAL_NETWORK` | deploy | Имя внешней Swarm overlay network, общей для `synadia-nats-agents` и `yt-mcp-ruby`. |
 | `YOUTRACK_API_CHECK_PROJECT` | gateway | Project shortName для проверки custom fields, например `CS`. |
 | `YOUTRACK_TOKEN` | gateway | Локальный direct REST fallback. Production stack его не прокидывает; worker его тоже не получает. |

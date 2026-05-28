@@ -25,7 +25,7 @@ export class YouTrackMcpClient {
     return decodeToolPayload(result);
   }
 
-  async request(method, params = {}, { skipInitialize = false, notification = false } = {}) {
+  async request(method, params = {}, { skipInitialize = false, notification = false, retryOnSessionReset = true } = {}) {
     if (!this.enabled) throw new Error("YOUTRACK_MCP_URL is not set.");
     if (!skipInitialize && !notification && !this.initialized) await this.initialize();
 
@@ -35,7 +35,18 @@ export class YouTrackMcpClient {
       params,
       ...(notification ? {} : { id: this.nextId++ }),
     };
-    const payload = await this.post(body);
+    let payload;
+    try {
+      payload = await this.post(body);
+    } catch (error) {
+      if (!skipInitialize && retryOnSessionReset && isSessionNotFound(error)) {
+        this.resetSession();
+        await this.initialize();
+        return this.request(method, params, { skipInitialize, notification, retryOnSessionReset: false });
+      }
+      throw error;
+    }
+
     if (notification) return null;
     if (!payload) throw new Error(`YouTrack MCP ${method} returned an empty response.`);
     if (payload.error) {
@@ -62,6 +73,11 @@ export class YouTrackMcpClient {
     await this.request("notifications/initialized", {}, { notification: true });
   }
 
+  resetSession() {
+    this.sessionId = "";
+    this.initialized = false;
+  }
+
   async post(body) {
     const response = await fetch(this.url, {
       method: "POST",
@@ -79,7 +95,10 @@ export class YouTrackMcpClient {
 
     const text = await response.text();
     if (!response.ok) {
-      throw new Error(`YouTrack MCP HTTP ${response.status}: ${text.slice(0, 500)}`);
+      const error = new Error(`YouTrack MCP HTTP ${response.status}: ${text.slice(0, 500)}`);
+      error.status = response.status;
+      error.body = text;
+      throw error;
     }
     if (!text.trim()) return null;
     return parseMcpResponse(text);
@@ -141,4 +160,8 @@ function toolErrorMessage(result) {
 function jsonRpcErrorMessage(error) {
   if (!error || typeof error !== "object") return String(error || "unknown JSON-RPC error");
   return error.message || JSON.stringify(error);
+}
+
+function isSessionNotFound(error) {
+  return error?.status === 404 && /Session not found/i.test(error.body || error.message || "");
 }

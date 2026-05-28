@@ -199,7 +199,7 @@ Production gateway должен ходить в YouTrack через внутре
 
 ```bash
 YOUTRACK_BASE_URL=https://yt.giscloud.ru
-YOUTRACK_MCP_URL=http://yt-mcp-ruby_app:9292
+YOUTRACK_MCP_URL=http://agents_yt_mcp_ruby:9292
 YOUTRACK_MCP_EXTERNAL_NETWORK=yt-mcp-ruby-internal
 YOUTRACK_API_CHECK_PROJECT=CS
 YOUTRACK_CODEX_SESSION_FIELD='Codex Session ID'

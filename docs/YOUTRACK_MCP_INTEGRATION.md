@@ -19,7 +19,7 @@ YouTrack webhook
   -> JetStream result
   -> nats-synadia-dev_app gateway
   -> MCP HTTP tools/call
-  -> yt-mcp-ruby_app
+  -> agents_yt_mcp_ruby
   -> YouTrack REST API
 ```
 
@@ -46,7 +46,7 @@ should stay internal; only `/health` should be public.
 Set these in GitLab CI/CD variables for this project:
 
 ```text
-YOUTRACK_MCP_URL=http://yt-mcp-ruby_app:9292
+YOUTRACK_MCP_URL=http://agents_yt_mcp_ruby:9292
 YOUTRACK_MCP_EXTERNAL_NETWORK=yt-mcp-ruby-internal
 YOUTRACK_API_CHECK_PROJECT=CS
 YOUTRACK_BASE_URL=https://yt.giscloud.ru
@@ -61,12 +61,13 @@ secret.
 Both stacks must join the same external overlay network:
 
 ```text
-yt-mcp-ruby_app
+agents_yt_mcp_ruby
 nats-synadia-dev_app
 ```
 
 `stack/deploy.sh` creates `YOUTRACK_MCP_EXTERNAL_NETWORK` when it is set. The
-`yt-mcp-ruby` stack must also attach its `app` service to the same network.
+`yt-mcp-ruby` deployment must also attach `agents_yt_mcp_ruby` to the same
+network. The old `yt-mcp-ruby_app` DNS name remains as a compatibility alias.
 
 ## Verification
 
