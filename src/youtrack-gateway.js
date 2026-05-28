@@ -694,11 +694,11 @@ function checkCodexSessionField(checks, issue) {
   const field = (issue.customFields || []).find((item) => item.name === CODEX_SESSION_FIELD);
   if (!field) {
     checks.push({ label: "codex_session_field_exists", ok: false, error: `${CODEX_SESSION_FIELD} is missing` });
-  } else if (field.$type !== "TextIssueCustomField") {
+  } else if (!["TextIssueCustomField", "SimpleIssueCustomField"].includes(field.$type)) {
     checks.push({
       label: "codex_session_field_type",
       ok: false,
-      error: `${CODEX_SESSION_FIELD} must be TextIssueCustomField, got ${field.$type || "(unknown)"}`,
+      error: `${CODEX_SESSION_FIELD} must be TextIssueCustomField or SimpleIssueCustomField, got ${field.$type || "(unknown)"}`,
     });
   } else {
     checks.push({ label: "codex_session_field_type", ok: true, details: { type: field.$type } });
