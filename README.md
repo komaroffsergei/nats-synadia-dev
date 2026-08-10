@@ -1,5 +1,9 @@
 # synadia-nats-agents
 
+## Кратко о проекте
+
+Асинхронный pipeline YouTrack → NATS JetStream → отдельный Codex worker с возвратом результата через MCP. Структура: gateway и worker в `src/`, NATS-конфигурация в `nats.conf`, Vue/TypeScript demo UI в `examples/agent-web-ui/`, эксплуатационные схемы в `docs/diagrams/`. Интересен быстрым webhook-ack, устойчивой очередью заданий, мониторингом heartbeats и отделением выполнения агента от HTTP ingress.
+
 Учебный, но production-развернутый pipeline для связи YouTrack, NATS
 JetStream и Codex:
 
