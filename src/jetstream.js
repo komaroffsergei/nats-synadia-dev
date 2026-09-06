@@ -83,6 +83,7 @@ async function ensureStream(jsm) {
     retention: RetentionPolicy.Workqueue,
     storage: StorageType.File,
     max_msgs: Number(env("YT_CODEX_MAX_MSGS", "10000")),
+    max_bytes: Number(env("YT_CODEX_MAX_BYTES", "67108864")),
     max_age: Number(env("YT_CODEX_MAX_AGE_HOURS", "168")) * 60 * 60 * 1_000_000_000,
   });
 }
@@ -94,6 +95,7 @@ async function ensureConsumer(jsm, durableName, filterSubject, maxAckPending) {
     deliver_policy: DeliverPolicy.All,
     filter_subject: filterSubject,
     ack_wait: ACK_WAIT_NANOS,
+    max_deliver: Number(env("YT_CODEX_MAX_DELIVER", "5")),
     max_ack_pending: Number.isFinite(maxAckPending) && maxAckPending > 0 ? maxAckPending : 1,
   };
 

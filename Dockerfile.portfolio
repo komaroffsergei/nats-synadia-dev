@@ -1,0 +1,10 @@
+FROM node:24.19.0-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03
+WORKDIR /app
+COPY portfolio/package*.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+COPY src/common.js src/jetstream.js src/dry-analysis.js src/portfolio-*.js ./src/
+COPY portfolio/web ./portfolio/web
+RUN mkdir /data && chown node:node /data
+USER node
+EXPOSE 8000
+CMD ["node","src/portfolio-gateway.js"]
