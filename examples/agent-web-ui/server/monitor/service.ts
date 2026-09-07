@@ -26,7 +26,10 @@ function notify() {
       if (d.share) {
         const share=store.publicShareById(d.share);
         if (!share) {ws.send(JSON.stringify({kind:'revoked'}));ws.close(1008,'share_unavailable');continue;}
-        if (d.cursor!==store.cursor()) ws.send(JSON.stringify({kind:'snapshot',data:store.publicSnapshot(share)}));
+        const cursor=store.publicCursor(share);
+        if (d.cursor!==cursor) ws.send(JSON.stringify({kind:'snapshot',data:store.publicSnapshot(share)}));
+        d.cursor=cursor;
+        continue;
       } else if (d.session) {
         const cursor=store.cursor();
         if (d.cursor!==cursor) ws.send(JSON.stringify({kind:'snapshot',data:store.session(d.session)}));
@@ -50,7 +53,7 @@ function connectionState() {
     gap:store.state('sequenceGap'),ingest:store.state('ingest'),retentionHours:24,ledgerDays:90,sourceLabel:'Codex proxy', legacy:store.state('legacy') };
 }
 
-type PeerData={owner:string|false|null;share?:string;session:string|null;cursor:number};
+type PeerData={owner:string|false|null;share?:string;session:string|null;cursor:number|string};
 const server=Bun.serve<PeerData>({
   hostname:process.env.MONITOR_HOST || '0.0.0.0',port,
   maxRequestBodySize:32_768,
@@ -111,7 +114,7 @@ const server=Bun.serve<PeerData>({
     }
   },
   websocket:{
-    open(ws) {peers.add(ws);ws.send(JSON.stringify({kind:'ready',cursor:store.cursor()}));notify();},
+    open(ws) {peers.add(ws);ws.send(JSON.stringify({kind:'ready',cursor:ws.data.share?null:store.cursor()}));notify();},
     message(ws,message) {
       try {
         if (String(message).length>4096) throw Error();

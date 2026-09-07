@@ -163,6 +163,10 @@ export class MonitorStore {
     });
   }
   publicShareById(id:string) { return this.db.query('SELECT * FROM shares WHERE id=? AND revoked_at IS NULL AND expires_at>?').get(id,new Date().toISOString()) as any; }
+  publicCursor(share:any) {
+    const row=this.db.query('SELECT MAX(seq) seq FROM events WHERE session_id=? AND at>=?').get(share.session_id,share.start_at) as any;
+    return this.hash(`${share.session_id}/${share.start_at}/${row.seq||0}`).slice(0,32);
+  }
   publicTitle(id:string,from:string) {
     const r=this.db.query("SELECT body FROM items WHERE session_id=? AND at>=? AND json_extract(body,'$.role')='user' ORDER BY seq LIMIT 1").get(id,from) as any;
     return r ? JSON.parse(r.body).text.replace(/\s+/g,' ').slice(0,140) : 'Рабочая сессия Codex';
@@ -171,7 +175,7 @@ export class MonitorStore {
     const s = this.session(share.session_id,share.start_at,before);
     if (!s) return null;
     const { model,status,updated_at,items,usage,partial,cursor,oldest,hasOlder } = s;
-    return { title:this.publicTitle(share.session_id,share.start_at),model,status,updated_at,partial,cursor,oldest,hasOlder,expiresAt:share.expires_at,
+    return { title:this.publicTitle(share.session_id,share.start_at),model,status,updated_at,partial,cursor:this.publicCursor(share),oldest,hasOlder,expiresAt:share.expires_at,
       items:items.map(({ kind,role,name,text,at,complete,truncated,segment,groupId }:any) => ({ kind,role,name,text,at,complete,truncated,segment,groupId })),
       usage:{ input:usage.input,output:usage.output,total:usage.total,cached:usage.cached,reasoning:usage.reasoning,quality:usage.quality,buckets:usage.buckets } };
   }

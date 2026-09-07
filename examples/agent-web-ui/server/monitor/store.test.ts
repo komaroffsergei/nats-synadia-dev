@@ -73,3 +73,12 @@ test('proxy restart ends orphan request status without inventing task completion
  const session=s.session(s.scopeId(old))!;
  expect(session.status).toBe('quiet');expect(session.partial).toBe(1);expect((session.attempts[0] as any).status).toBe('incomplete');
 });
+test('public cursor does not expose activity from a private session',()=>{
+ const s=create();const a=event('item.snapshot',{itemId:'m',text:'Public',revision:1});s.apply(a);
+ const sh=s.createShare(s.scopeId(a),'1970-01-01T00:00:00.000Z',1,'owner'),share=s.share(sh.token);
+ const before=s.publicCursor(share);
+ s.apply(event('item.snapshot',{itemId:'secret',text:'Private',revision:1},{sessionId:'private'}));
+ expect(s.publicCursor(share)).toBe(before);
+ s.apply(event('item.snapshot',{itemId:'m',text:'New public text',revision:2}));
+ expect(s.publicCursor(share)).not.toBe(before);
+});
