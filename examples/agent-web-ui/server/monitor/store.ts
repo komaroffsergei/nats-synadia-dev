@@ -126,10 +126,10 @@ export class MonitorStore {
     return (this.db.query(`SELECT * FROM sessions WHERE (title LIKE ? OR model LIKE ?) AND (?='' OR updated_at||id < ?) ORDER BY updated_at DESC,id DESC LIMIT ?`)
       .all(`%${search}%`,`%${search}%`,before,before,Math.min(limit,100)) as any[]).map(s => ({ ...s, usage: this.usage(s.id,undefined,false), shared: this.shares(s.id).some(x => !x.revoked_at && x.expires_at > new Date().toISOString()) }));
   }
-  session(id: string, from?: string, before = Number.MAX_SAFE_INTEGER) {
+  session(id: string, from?: string, before = Number.MAX_SAFE_INTEGER, offset = 0) {
     const s = this.db.query('SELECT * FROM sessions WHERE id=?').get(id) as any;
     if (!s) return null;
-    const items = (this.db.query('SELECT * FROM items WHERE session_id=? AND (? IS NULL OR at>=?) AND seq<? ORDER BY seq DESC LIMIT 80').all(id,from ?? null,from ?? null,before) as any[]).reverse()
+    const items = (this.db.query('SELECT * FROM items WHERE session_id=? AND (? IS NULL OR at>=?) AND seq<? ORDER BY seq DESC LIMIT 80 OFFSET ?').all(id,from ?? null,from ?? null,before,Math.max(0,Math.floor(offset))) as any[]).reverse()
       .map(r => ({ ...JSON.parse(r.body), at:r.at, seq:r.seq }));
     const attempts = this.db.query('SELECT * FROM attempts WHERE session_id=? AND (? IS NULL OR started_at>=?) ORDER BY started_at DESC LIMIT 300').all(id,from ?? null,from ?? null);
     const oldest=items[0]?.seq;
@@ -171,11 +171,11 @@ export class MonitorStore {
     const r=this.db.query("SELECT body FROM items WHERE session_id=? AND at>=? AND json_extract(body,'$.role')='user' ORDER BY seq LIMIT 1").get(id,from) as any;
     return r ? JSON.parse(r.body).text.replace(/\s+/g,' ').slice(0,140) : 'Рабочая сессия Codex';
   }
-  publicSnapshot(share:any,before = Number.MAX_SAFE_INTEGER) {
-    const s = this.session(share.session_id,share.start_at,before);
+  publicSnapshot(share:any,before = 0) {
+    const s = this.session(share.session_id,share.start_at,Number.MAX_SAFE_INTEGER,before);
     if (!s) return null;
-    const { model,status,updated_at,items,usage,partial,cursor,oldest,hasOlder } = s;
-    return { title:this.publicTitle(share.session_id,share.start_at),model,status,updated_at,partial,cursor:this.publicCursor(share),oldest,hasOlder,expiresAt:share.expires_at,
+    const { model,status,updated_at,items,usage,partial,hasOlder } = s;
+    return { title:this.publicTitle(share.session_id,share.start_at),model,status,updated_at,partial,cursor:this.publicCursor(share),oldest:before+items.length,hasOlder,expiresAt:share.expires_at,
       items:items.map(({ kind,role,name,text,at,complete,truncated,segment,groupId }:any) => ({ kind,role,name,text,at,complete,truncated,segment,groupId })),
       usage:{ input:usage.input,output:usage.output,total:usage.total,cached:usage.cached,reasoning:usage.reasoning,quality:usage.quality,buckets:usage.buckets } };
   }
