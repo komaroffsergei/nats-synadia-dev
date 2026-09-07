@@ -3,12 +3,13 @@ import { join } from 'node:path';
 import { connect } from '@nats-io/transport-node';
 import { jetstream } from '@nats-io/jetstream';
 import { validateEvent } from './contracts.ts';
+import { traceConnection } from './nats.ts';
 
 const outbox = process.env.MONITOR_OUTBOX || '/outbox';
 const healthPath = process.env.MONITOR_INGEST_HEALTH || '/status/ingest.json';
 const url = process.env.NATS_TRACE_URL;
 if (!url) throw Error('NATS_TRACE_URL required');
-const nc = await connect({ servers:url, name:'codex-trace-publisher', maxReconnectAttempts:-1 });
+const nc = await connect({ ...traceConnection(), name:'codex-trace-publisher' });
 const js = jetstream(nc);
 let sent=0, errors=0, lastEventAt:string|null=null;
 let connected=true;

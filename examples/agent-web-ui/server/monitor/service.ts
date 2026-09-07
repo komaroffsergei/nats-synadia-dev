@@ -2,6 +2,7 @@ import { connect } from '@nats-io/transport-node';
 import { jetstream } from '@nats-io/jetstream';
 import { readFile } from 'node:fs/promises';
 import { MonitorStore } from './store.ts';
+import { traceConnection } from './nats.ts';
 
 const store = new MonitorStore(process.env.MONITOR_DB || '/data/monitor.sqlite');
 const ingressKey=process.env.MONITOR_INGRESS_KEY || '';
@@ -141,7 +142,7 @@ async function project() {
   while (true) {
     let nc;
     try {
-      nc=await connect({servers:process.env.NATS_TRACE_URL,name:'codex-trace-projector',maxReconnectAttempts:-1});
+      nc=await connect({...traceConnection(),name:'codex-trace-projector'});
       void (async()=>{for await(const s of nc!.status()){if(s.type==='disconnect')natsConnected=false;if(s.type==='reconnect')natsConnected=true;}})();
       const js=jetstream(nc);
       const consumer=await js.consumers.get('CODEX_TRACE','console-projector');
