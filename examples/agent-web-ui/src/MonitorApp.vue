@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import MonitorTimelineItem from './components/MonitorTimelineItem.vue';
+import BroadcastManager from './components/BroadcastManager.vue';
 
 const privateMode=location.pathname.startsWith('/console');
 const liveId=location.pathname.startsWith('/live/')?location.pathname.split('/')[2]:null;
@@ -43,7 +44,7 @@ const chart=computed(()=>currentUsage.value?.buckets?.slice(-24)||[]);
 const maxBucket=computed(()=>Math.max(1,...chart.value.map((b:any)=>b.total)));
 const hasActivity=computed(()=>sessions.value.filter(s=>s.status==='streaming').length);
 const title=computed(()=>selected.value?.title || 'Сессия Codex');
-const tabs=[['sessions','Сессии'],['traffic','Трафик'],['usage','Токены'],['compare','Сравнение'],['connections','Подключение']];
+const tabs=[['sessions','Сессии'],['broadcasts','Эфир сайта'],['traffic','Трафик'],['usage','Токены'],['compare','Сравнение'],['connections','Подключение']];
 
 async function api(path:string,init?:RequestInit) {
   const r=await fetch(path,{credentials:'same-origin',...init});
@@ -222,6 +223,7 @@ onUnmounted(()=>{disposed=true;clearTimeout(reconnect);clearInterval(poll);ws?.c
           </template>
         </section>
       </main>
+      <BroadcastManager v-else-if="tab==='broadcasts'" :sessions="sessions" :selected-id="selectedId" />
       <main v-else-if="tab==='usage'" class="wide-panel">
         <div class="panel-heading"><div><h2>Токены</h2><p>Расход из ответов proxy. Кэш и reasoning уже входят в общий итог.</p></div><span class="badge">{{qualityLabel(usage?.quality)}}</span></div>
         <div class="usage-metrics"><div><span>Вход</span><strong>{{format(usage?.input)}}</strong></div><div><span>Из кэша · часть входа</span><strong>{{format(usage?.cached)}}</strong></div><div><span>Выход</span><strong>{{format(usage?.output)}}</strong></div><div><span>Reasoning · часть выхода</span><strong>{{format(usage?.reasoning)}}</strong></div></div>

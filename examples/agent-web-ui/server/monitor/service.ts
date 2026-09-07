@@ -2,13 +2,16 @@ import { connect } from '@nats-io/transport-node';
 import { jetstream } from '@nats-io/jetstream';
 import { readFile } from 'node:fs/promises';
 import { MonitorStore } from './store.ts';
+import { BroadcastStore } from './broadcasts.ts';
 import { traceConnection } from './nats.ts';
 
 const store = new MonitorStore(process.env.MONITOR_DB || '/data/monitor.sqlite');
+const broadcasts = new BroadcastStore(store);
 const ingressKey=process.env.MONITOR_INGRESS_KEY || '';
 if (!ingressKey && process.env.MONITOR_TEST !== 'true') throw Error('MONITOR_INGRESS_KEY required');
 const port=Number(process.env.MONITOR_PORT || 3310);
 const publicOrigin=process.env.MONITOR_ORIGIN || 'https://agents.komaroff-dev.ru';
+const broadcastOrigins = new Set([publicOrigin,...(process.env.MONITOR_PUBLIC_ORIGINS || 'https://komaroff-dev.ru').split(',')]);
 let natsConnected=false, ingestionError=false;
 const peers=new Set<any>();
 let notifyTimer:ReturnType<typeof setTimeout>|null=null;
@@ -20,9 +23,22 @@ function notify() {
   if (notifyTimer) return;
   notifyTimer=setTimeout(()=>{
     notifyTimer=null;
+    const broadcastCache=new Map<string,any>();
     for (const ws of peers) {
       if (ws.getBufferedAmount()>2_097_152) {ws.close(1013,'resync_required');continue;}
       const d=ws.data;
+      if (d.broadcast) {
+        const row=broadcasts.row(d.broadcast,false);
+        if (!row?.visible) {ws.send(JSON.stringify({kind:'revoked'}));ws.close(1008,'broadcast_unavailable');continue;}
+        if (row.mode==='replay') {
+          if(d.cursor!==row.updated_at)ws.send(JSON.stringify({kind:'broadcast_changed',data:broadcasts.metadata(row)}));
+          d.cursor=row.updated_at;continue;
+        }
+        if(!broadcastCache.has(row.id))broadcastCache.set(row.id,broadcasts.snapshot(row));
+        const snapshot=broadcastCache.get(row.id);
+        if(d.cursor!==snapshot.cursor)ws.send(JSON.stringify({kind:'broadcast',data:snapshot}));
+        d.cursor=snapshot.cursor;continue;
+      }
       if (d.share) {
         const share=store.publicShareById(d.share);
         if (!share) {ws.send(JSON.stringify({kind:'revoked'}));ws.close(1008,'share_unavailable');continue;}
@@ -53,7 +69,7 @@ function connectionState() {
     gap:store.state('sequenceGap'),ingest:store.state('ingest'),retentionHours:24,ledgerDays:90,sourceLabel:'Codex proxy', legacy:store.state('legacy') };
 }
 
-type PeerData={owner:string|false|null;share?:string;session:string|null;cursor:number|string};
+type PeerData={owner:string|false|null;share?:string;broadcast?:string;session:string|null;cursor:number|string};
 const server=Bun.serve<PeerData>({
   hostname:process.env.MONITOR_HOST || '0.0.0.0',port,
   maxRequestBodySize:32_768,
@@ -72,13 +88,31 @@ const server=Bun.serve<PeerData>({
     }
     try {
       if (path==='/monitor/ws' || path==='/public/ws') {
-        if (req.headers.get('origin')!==publicOrigin) return json({error:'origin'},403);
+        const broadcastId=path==='/public/ws'?url.searchParams.get('broadcast'):null;
+        if (broadcastId ? !broadcastOrigins.has(req.headers.get('origin') || '') : req.headers.get('origin')!==publicOrigin) return json({error:'origin'},403);
         if (peers.size>=100) return json({error:'viewer_limit'},429);
-        const requested=path==='/public/ws'?publicShare(url.searchParams.get('share') || ''):null;
-        if (path==='/public/ws'&&!requested) return json({error:'share_unavailable'},410);
-        if (srv.upgrade(req,{data:{owner:actor,share:requested?.id,session:null,cursor:-1}})) return;
+        const requested=path==='/public/ws'&&!broadcastId?publicShare(url.searchParams.get('share') || ''):null;
+        const broadcast=broadcastId?broadcasts.row(broadcastId,false):null;
+        if (path==='/public/ws' && (broadcastId ? !broadcast?.visible : !requested)) return json({error:'share_unavailable'},410);
+        if (srv.upgrade(req,{data:{owner:actor,share:requested?.id,broadcast:broadcast?.id,session:null,cursor:-1}})) return;
         return json({error:'websocket_required'},400);
       }
+      if(path==='/api/public/broadcasts' && req.method==='GET')return json(broadcasts.list());
+      const broadcastPublic=path.match(/^\/api\/public\/broadcasts\/([a-f0-9]{32})$/);
+      if(broadcastPublic && req.method==='GET') {
+        const snapshot=broadcasts.public(broadcastPublic[1],Math.max(0,Number(url.searchParams.get('before'))||0));
+        return snapshot?json(snapshot):json({error:'broadcast_unavailable'},410);
+      }
+      if(path==='/api/v1/monitor/broadcasts' && req.method==='GET')return json(broadcasts.list(true));
+      if(path==='/api/v1/monitor/broadcasts/preview' && req.method==='POST')return json(broadcasts.prepare(await req.json(),String(actor)));
+      if(path==='/api/v1/monitor/broadcasts' && req.method==='POST') {
+        const body=await req.json(),result=broadcasts.publish(body.draftId,String(actor));notify();return json(result,201);
+      }
+      const broadcastPrivate=path.match(/^\/api\/v1\/monitor\/broadcasts\/([a-f0-9]{32})$/);
+      if(broadcastPrivate && req.method==='PATCH') {
+        const result=broadcasts.update(broadcastPrivate[1],await req.json(),String(actor));notify();return json(result);
+      }
+      if(broadcastPrivate && req.method==='DELETE') {broadcasts.remove(broadcastPrivate[1],String(actor));notify();return json({ok:true});}
       if (path==='/api/public/sessions' && req.method==='GET') return json(store.publicSessions());
       const publicMatch=path.match(/^\/api\/public\/sessions\/([A-Za-z0-9_-]+)$/);
       if (publicMatch && req.method==='GET') {
@@ -116,17 +150,17 @@ const server=Bun.serve<PeerData>({
       return json({error:'not_found'},404);
     } catch (error) {
       const code=(error as Error).message;
-      return json({error:['invalid_share','invalid_title'].includes(code)?code:'request_failed'},400);
+      return json({error:['invalid_share','invalid_title','invalid_range','invalid_broadcast','not_found','recording_too_large','recording_unavailable','draft_limit','archive_limit','preview_expired'].includes(code)?code:'request_failed'},400);
     }
   },
   websocket:{
-    open(ws) {peers.add(ws);ws.send(JSON.stringify({kind:'ready',cursor:ws.data.share?null:store.cursor()}));notify();},
+    open(ws) {peers.add(ws);ws.send(JSON.stringify({kind:'ready',cursor:ws.data.share||ws.data.broadcast?null:store.cursor()}));notify();},
     message(ws,message) {
       try {
         if (String(message).length>4096) throw Error();
         const data=JSON.parse(String(message));
         if (data.kind!=='subscribe') throw Error();
-        if (ws.data.share) {notify();return;}
+        if (ws.data.share || ws.data.broadcast) {notify();return;}
         if (data.sessionId && !/^[a-f0-9]{32}$/.test(data.sessionId)) throw Error();
         ws.data.session=data.sessionId || null;
         ws.data.cursor=-1;
@@ -170,7 +204,7 @@ setInterval(()=>{
   notify();
   for(const ws of peers)ws.ping();
 },2000).unref();
-setInterval(()=>{store.prune();for(const [key,value] of rate)if(Date.now()-value.at>120_000)rate.delete(key);},60_000).unref();
+setInterval(()=>{store.prune();broadcasts.prune();for(const [key,value] of rate)if(Date.now()-value.at>120_000)rate.delete(key);},60_000).unref();
 setInterval(async()=>{
   for(const key of ['ingest','legacy']) {
     try {store.setState(key,JSON.parse(await readFile(`/status/${key}.json`,'utf8')));} catch {/* No fabricated state when unavailable. */}
