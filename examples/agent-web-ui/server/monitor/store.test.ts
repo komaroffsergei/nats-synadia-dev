@@ -67,3 +67,9 @@ test('history pages preserve every item and start-time publication excludes old 
  expect(JSON.stringify(s.publicSnapshot(s.share(sh.token)))).not.toContain('EARLIER PRIVATE TITLE');
  expect(JSON.stringify(s.publicSessions())).not.toContain('EARLIER PRIVATE TITLE');
 });
+test('proxy restart ends orphan request status without inventing task completion',()=>{
+ const s=create();const old=event('request.started',{}, {at:'2026-09-07T10:00:00.000Z'});s.apply(old);
+ s.apply(event('source.status',{epochStartedAt:'2026-09-07T11:00:00.000Z'},{epoch:'epoch2',at:'2026-09-07T11:00:01.000Z'}));
+ const session=s.session(s.scopeId(old))!;
+ expect(session.status).toBe('quiet');expect(session.partial).toBe(1);expect((session.attempts[0] as any).status).toBe('incomplete');
+});

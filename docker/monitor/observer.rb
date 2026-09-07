@@ -28,6 +28,7 @@ module CodexMonitor
       @directory, @max_bytes = directory, max_bytes
       @queue = SizedQueue.new(queue_size)
       @epoch = SecureRandom.uuid
+      @started_at = Time.now.utc.iso8601(6)
       @seq, @dropped, @written, @bytes = 0, 0, 0, 0
       @mutex = Mutex.new
       @worker = Thread.new { work }
@@ -77,7 +78,10 @@ module CodexMonitor
           @mutex.synchronize { @dropped += 1 }
           next
         end
-        event[:data][:deliveryDropped] = @dropped if event[:type] == 'source.status'
+        if event[:type] == 'source.status'
+          event[:data][:deliveryDropped] = @dropped
+          event[:data][:epochStartedAt] = @started_at
+        end
         filename = format('%020d-%s.json', event[:sequence], @epoch)
         atomic_write(File.join(@directory, filename), JSON.generate(event))
         @bytes += content.bytesize

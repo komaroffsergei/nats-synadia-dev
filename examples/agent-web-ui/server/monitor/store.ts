@@ -48,6 +48,13 @@ export class MonitorStore {
       if (event.type === 'delivery.gap') this.db.query('UPDATE sessions SET partial=1 WHERE id=?').run(sid);
       if (event.type === 'source.status') {
         this.setState('source', { ...d, at: event.at });
+        const last=this.state('sourceEpoch');
+        if (d.epochStartedAt && (!last || d.epochStartedAt>last.at)) {
+          // A newer proxy process cannot retain sockets from the previous process.
+          this.db.query("UPDATE attempts SET status='incomplete',error='Источник перезапущен; окончание запроса не наблюдалось' WHERE status='streaming' AND started_at<?").run(d.epochStartedAt);
+          this.db.query("UPDATE sessions SET status='quiet',partial=1 WHERE status='streaming' AND NOT EXISTS(SELECT 1 FROM attempts a WHERE a.session_id=sessions.id AND a.status='streaming')").run();
+          this.setState('sourceEpoch',{epoch:event.epoch,at:d.epochStartedAt});
+        }
         if (d.deliveryDropped > 0) this.db.query('UPDATE sessions SET partial=1 WHERE tenant=?').run(event.tenantId);
       }
       if (event.type === 'request.started' && event.attemptId && event.requestId) {
