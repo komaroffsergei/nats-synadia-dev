@@ -15,3 +15,6 @@ nats-server*
 *.log
 *.iml
 .DS_Store
+.git
+**/*.test.ts
+docker/monitor/observer_test.rb

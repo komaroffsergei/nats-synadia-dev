@@ -1,0 +1,10 @@
+{
+  "imageId": "sha256:698800eb0ebf45085ffe497997bd5ca3dccb17ab3c312d948a041fb2d3435b8d",
+  "image": "ruby-mitm-proxy:0.3.90-memory-fix-20260906",
+  "codeHashes": {
+    "asset_store.rb": "827b886263fa9661b7facc2706265bceab7779e31c7397a2d5abb170f8eec07b",
+    "Gemfile.lock": "d658ea4f2f8b789b442ff74df37a7709b357ead57bb26b1fcbc73e752a978f58",
+    "proxy.rb": "ac563e26aa5d19c59c45206fd5a87279baff8bc5afc26388f3a521ea52da11ee",
+    "session_conversation.rb": "545e02ddb3419c4c56a0fc405d28035775157b7b944b2899cbd1411075ca7554"
+  }
+}

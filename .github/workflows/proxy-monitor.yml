@@ -1,0 +1,32 @@
+name: Proxy monitoring checks
+on:
+  push:
+    branches: [feature/proxy-monitoring]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.10
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+      - run: gem install minitest --no-document
+      - run: ruby docker/monitor/observer_test.rb
+      - run: npm ci --omit=dev
+      - run: bun install --frozen-lockfile
+        working-directory: examples/agent-web-ui
+      - run: bun test server/monitor/store.test.ts
+        working-directory: examples/agent-web-ui
+      - run: bunx vue-tsc --noEmit
+        working-directory: examples/agent-web-ui
+      - run: bun run build
+        working-directory: examples/agent-web-ui
