@@ -138,6 +138,9 @@ module CodexMonitor
 
     def server(payload)
       value = JSON.parse(payload.to_s)
+      # Rate-limit/connection notifications are not model responses and must not
+      # consume the next pending request or create an empty phantom session.
+      return unless value['type'].to_s.start_with?('response.') || value['type'] == 'error'
       response_id = value.dig('response', 'id') || value['response_id']
       capture = response_id && @responses[response_id]
       if value['type'] == 'response.created' && !capture
@@ -146,12 +149,13 @@ module CodexMonitor
       end
       capture ||= @items[value['item_id']]
       capture ||= @responses.values.reject(&:terminal?).uniq.then { |active| active.length == 1 ? active.first : nil }
-      capture ||= @pending.shift if @pending.length == 1
+      capture ||= @pending.first if @pending.length == 1
       unless capture
-        capture = Capture.new(@sink, @user, {}, 'websocket')
+        capture = Capture.new(@sink, @user, @headers, 'websocket')
         @all << capture
       end
       @responses[response_id] = capture if response_id
+      @pending.delete(capture) if response_id
       item_id = value.dig('item', 'id') || value['item_id']
       @items[item_id] = capture if item_id
       capture.server(value)

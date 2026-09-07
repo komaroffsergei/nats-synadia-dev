@@ -95,4 +95,16 @@ class ObserverTest < Minitest::Test
     io.string.bytes.each_slice(7){|bytes|c.feed(bytes.pack('C*'))};c.close
     assert @sink.events.any?{|e|e[:type]=='item.snapshot'&&e[:data][:text]=='Сжатый поток'}
   end
+  def test_connection_notifications_do_not_steal_pending_request
+    sink=MemorySink.new;c=CodexMonitor::WebSocketCapture.new(sink,'test',{'session-id'=>'real-session'})
+    c.client(JSON.generate({type:'response.create',model:'qa',input:'hello'}))
+    c.server(JSON.generate({type:'rate_limits.updated',rate_limits:[]}))
+    c.server(JSON.generate({type:'response.in_progress'}))
+    c.server(JSON.generate({type:'response.created',response:{id:'r1',model:'qa'}}))
+    c.server(JSON.generate({type:'response.completed',response:{id:'r1',usage:{input_tokens:3,output_tokens:2,total_tokens:5}}}))
+    c.server(JSON.generate({type:'rate_limits.updated',rate_limits:[]}));c.close
+    assert_equal 1,sink.events.select{|e|e[:type]=='request.started'}.length
+    assert_equal 1,sink.events.map{|e|e[:sessionId]}.uniq.length
+    assert_equal 1,sink.events.filter_map{|e|e[:attemptId]}.uniq.length
+  end
 end
