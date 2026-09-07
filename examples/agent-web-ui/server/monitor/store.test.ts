@@ -1,6 +1,10 @@
 import { test,expect,afterEach } from 'bun:test';
 import { MonitorStore } from './store.ts';
 import type { MonitorEvent } from './contracts.ts';
+import { displayParts, userTitle } from '../../shared/monitor-display.ts';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 const stores:MonitorStore[]=[];
 const create=()=>{const s=new MonitorStore(':memory:');stores.push(s);return s;};
 afterEach(()=>{for(const s of stores.splice(0))s.db.close();});
@@ -81,4 +85,65 @@ test('public cursor does not expose activity from a private session',()=>{
  expect(s.publicCursor(share)).toBe(before);
  s.apply(event('item.snapshot',{itemId:'m',text:'New public text',revision:2}));
  expect(s.publicCursor(share)).not.toBe(before);
+});
+
+test('service wrappers stay intact, while a mixed user request supplies the title',()=>{
+ const text='<recommended_plugins>\nPlugin list\n</recommended_plugins>\n<environment_context>cwd</environment_context>\n\n## My request:\nПроверь связь';
+ const parts=displayParts({role:'user',text});
+ expect(parts.map(p=>p.text).join('')).toBe(text);
+ expect(parts.filter(p=>p.context)).toHaveLength(2);
+ expect(userTitle(text)).toBe('Проверь связь');
+ expect(displayParts({role:'assistant',text})).toEqual([{text,context:false}]);
+ const s=create(),a=event('item.snapshot',{itemId:'ctx',role:'user',text:'<environment_context>cwd</environment_context>'});s.apply(a);
+ s.apply(event('item.snapshot',{itemId:'request',role:'user',text,context:true}));
+ expect(s.session(s.scopeId(a))?.title).toBe('Проверь связь');
+ expect(s.session(s.scopeId(a))?.items.map((i:any)=>i.text)).toContain(text);
+});
+
+test('title generation is a labelled service activity, never inferred from a model or merged by title',()=>{
+ const prompt='You are a helpful assistant. You will be presented with a user prompt, and your job is to provide a short title for a task. The title you generate will be shown in the UI to represent the prompt.';
+ const s=create(),a=event('item.snapshot',{itemId:'ctx',role:'user',text:'<environment_context>cwd</environment_context>'});s.apply(a);
+ s.apply(event('item.snapshot',{itemId:'prompt',role:'user',text:prompt}));
+ s.apply(event('item.snapshot',{itemId:'reply',role:'assistant',text:'{"title":"Проверить связь"}',complete:true}));
+ expect(s.session(s.scopeId(a))?.activity).toBe('title_generation');
+ expect(s.session(s.scopeId(a))?.title).toBe('Название чата: Проверить связь');
+ expect(displayParts({role:'user',text:prompt})).toEqual([{text:prompt,context:true}]);
+ const other=event('item.snapshot',{itemId:'prompt',role:'user',text:'Проверь связь'},{sessionId:'other'});s.apply(other);
+ expect(s.sessions()).toHaveLength(2);expect(s.session(s.scopeId(other))?.activity).toBe('conversation');
+});
+
+test('public title skips service context and respects publication start time',()=>{
+ const s=create(),old='2026-09-07T10:00:00.000Z',now='2026-09-07T11:00:00.000Z';
+ const a=event('item.snapshot',{itemId:'old',role:'user',text:'Private title'},{at:old});s.apply(a);
+ s.apply(event('item.snapshot',{itemId:'ctx',role:'user',text:'<environment_context>Private workspace</environment_context>'},{at:now}));
+ s.apply(event('item.snapshot',{itemId:'current',role:'user',text:'Публичный вопрос'},{at:now}));
+ expect(s.publicTitle(s.scopeId(a),now)).toBe('Публичный вопрос');
+ expect(s.publicTitle(s.scopeId(a),'2026-09-07T12:00:00.000Z')).toBe('Рабочая сессия Codex');
+});
+
+test('existing history is relabelled once on upgrade without changing items or usage',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'monitor-display-test-')),path=join(dir,'test.sqlite');
+ let s=new MonitorStore(path);
+ try {
+  const a=event('item.snapshot',{itemId:'ctx',role:'user',text:'<recommended_plugins>Tools</recommended_plugins>'});s.apply(a);
+  s.apply(event('item.snapshot',{itemId:'prompt',role:'user',text:'Проверь связь'}));
+  s.apply(event('usage.snapshot',{input:100,output:20,total:120,revision:1}));
+  const id=s.scopeId(a),before=s.session(id)!.items;
+  s.db.exec("DELETE FROM state WHERE key='displayVersion'; UPDATE sessions SET title='<recommended_plugins>Tools</recommended_plugins>'");
+  s.db.close();s=new MonitorStore(path);
+  expect(s.session(id)!.title).toBe('Проверь связь');expect(s.session(id)!.items).toEqual(before);expect(s.usage().total).toBe(120);
+  expect(s.state('displayVersion')).toBe(1);
+ } finally {s.db.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('public items have distinct share-scoped identities even at the same timestamp',()=>{
+ const s=create(),at=new Date().toISOString();
+ const a=event('item.snapshot',{itemId:'original-context',role:'user',text:'<environment_context>cwd</environment_context>'},{at});s.apply(a);
+ s.apply(event('item.snapshot',{itemId:'original-request',role:'user',text:'Проверь связь'},{at}));
+ const first=s.createShare(s.scopeId(a),'1970-01-01T00:00:00.000Z',1,'owner');
+ const second=s.createShare(s.scopeId(a),'1970-01-01T00:00:00.000Z',1,'owner');
+ const items=s.publicSnapshot(s.share(first.token))!.items;
+ expect(new Set(items.map((i:any)=>i.itemId)).size).toBe(2);
+ expect(items[0].itemId).not.toBe(s.publicSnapshot(s.share(second.token))!.items[0].itemId);
+ expect(JSON.stringify(items)).not.toContain('original-');
 });

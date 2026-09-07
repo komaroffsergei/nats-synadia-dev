@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { validateEvent, usageQuality, type MonitorEvent } from './contracts.ts';
+import { nextDisplay, type SessionDisplay } from '../../shared/monitor-display.ts';
 
 export class MonitorStore {
   db: Database;
@@ -25,6 +26,22 @@ export class MonitorStore {
       CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS producers(key TEXT PRIMARY KEY,sequence INTEGER NOT NULL);
     `);
+    const columns = this.db.query('PRAGMA table_info(sessions)').all() as any[];
+    if (!columns.some(c => c.name === 'activity')) this.db.exec("ALTER TABLE sessions ADD COLUMN activity TEXT NOT NULL DEFAULT 'conversation'");
+    if (!this.state('displayVersion')) this.db.transaction(() => {
+      this.db.exec("UPDATE sessions SET title='',activity='conversation'");
+      for (const row of this.db.query('SELECT session_id,body FROM items ORDER BY seq').iterate() as Iterable<any>)
+        this.updateDisplay(row.session_id, JSON.parse(row.body));
+      this.setState('displayVersion', 1);
+    })();
+  }
+
+  updateDisplay(id: string, item: any) {
+    const current = this.db.query('SELECT title,activity FROM sessions WHERE id=?').get(id) as SessionDisplay;
+    if (!current) return;
+    const next = nextDisplay(current, item);
+    if (next.title !== current.title || next.activity !== current.activity)
+      this.db.query('UPDATE sessions SET title=?,activity=? WHERE id=?').run(next.title, next.activity, id);
   }
 
   apply(event: MonitorEvent) {
@@ -79,7 +96,7 @@ export class MonitorStore {
             .run(sid,d.itemId,seq,event.at,JSON.stringify(item));
           if (d.complete && d.groupId && Number.isInteger(d.segments)) this.db.query("DELETE FROM items WHERE session_id=? AND json_extract(body,'$.groupId')=? AND json_extract(body,'$.segment')>=?").run(sid,d.groupId,d.segments);
         }
-        if (d.role === 'user' && !d.segment) this.db.query("UPDATE sessions SET title=? WHERE id=? AND title=''").run(d.text.replace(/\s+/g,' ').slice(0,140),sid);
+        if (d.role === 'user' || d.role === 'assistant' && d.complete) this.updateDisplay(sid, d);
         if (d.truncated) this.db.query('UPDATE sessions SET partial=1 WHERE id=?').run(sid);
       }
       if (event.type === 'usage.snapshot' && event.attemptId) {
@@ -168,15 +185,25 @@ export class MonitorStore {
     return this.hash(`${share.session_id}/${share.start_at}/${row.seq||0}`).slice(0,32);
   }
   publicTitle(id:string,from:string) {
-    const r=this.db.query("SELECT body FROM items WHERE session_id=? AND at>=? AND json_extract(body,'$.role')='user' ORDER BY seq LIMIT 1").get(id,from) as any;
-    return r ? JSON.parse(r.body).text.replace(/\s+/g,' ').slice(0,140) : 'Рабочая сессия Codex';
+    let display: SessionDisplay = { title: '', activity: 'conversation' };
+    let after = 0;
+    while (true) {
+      const rows = this.db.query("SELECT seq,body FROM items WHERE session_id=? AND at>=? AND seq>? AND json_extract(body,'$.role') IN ('user','assistant') ORDER BY seq LIMIT 32").all(id,from,after) as any[];
+      for (const r of rows) {
+        display = nextDisplay(display, JSON.parse(r.body));
+        if (display.title && (display.activity === 'conversation' || display.title.startsWith('Название чата: '))) return display.title;
+        after = r.seq;
+      }
+      if (rows.length < 32) break;
+    }
+    return display.title || 'Рабочая сессия Codex';
   }
   publicSnapshot(share:any,before = 0) {
     const s = this.session(share.session_id,share.start_at,Number.MAX_SAFE_INTEGER,before);
     if (!s) return null;
     const { model,status,updated_at,items,usage,partial,hasOlder } = s;
     return { title:this.publicTitle(share.session_id,share.start_at),model,status,updated_at,partial,cursor:this.publicCursor(share),oldest:before+items.length,hasOlder,expiresAt:share.expires_at,
-      items:items.map(({ kind,role,name,text,at,complete,truncated,segment,groupId }:any) => ({ kind,role,name,text,at,complete,truncated,segment,groupId })),
+      items:items.map(({ itemId,kind,role,name,text,at,complete,truncated,segment,groupId }:any) => ({ itemId:this.hash(`${share.id}/${itemId}`).slice(0,32),kind,role,name,text,at,complete,truncated,segment,groupId })),
       usage:{ input:usage.input,output:usage.output,total:usage.total,cached:usage.cached,reasoning:usage.reasoning,quality:usage.quality,buckets:usage.buckets } };
   }
   prune(now=Date.now()) {
