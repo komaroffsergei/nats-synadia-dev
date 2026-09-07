@@ -107,4 +107,12 @@ class ObserverTest < Minitest::Test
     assert_equal 1,sink.events.map{|e|e[:sessionId]}.uniq.length
     assert_equal 1,sink.events.filter_map{|e|e[:attemptId]}.uniq.length
   end
+  def test_basic_header_and_quoted_multiline_password_are_fully_redacted
+    text=CodexMonitor.clean("Authorization: Basic dXNlcjpwYXNzd29yZA==\npassword: \"two word\nsecret\"")
+    refute_includes text,'dXNlcjpwYXNzd29yZA=='
+    refute_includes text,'two word'
+    refute_includes text,"\nsecret"
+    partial=CodexMonitor.clean('password: "unfinished multi word secret')
+    refute_includes partial,'multi word'
+  end
 end

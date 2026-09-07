@@ -16,8 +16,10 @@ module CodexMonitor
     text = value.to_s.encode('UTF-8', invalid: :replace, undef: :replace)
     text = text.gsub(/(?:sk-|gh[pousr]_|github_pat_|xox[baprs]-)[A-Za-z0-9_\-]{6,}/, REDACTED)
     text = text.gsub(/\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+(?:\.[A-Za-z0-9_\-]*)?/, REDACTED)
-    text = text.gsub(/((?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie)\s*["']?\s*[:=]\s*["']?)([^\s"'`,;}]+)/i, '\1' + REDACTED)
     text = text.gsub(/\b(Bearer|Basic)\s+[A-Za-z0-9+\/_=.\-]+/i, '\1 ' + REDACTED)
+    # Quoted passwords may contain spaces; redact incomplete quoted values too.
+    text = text.gsub(/((?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie)\s*["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*(?:"|\z)|'(?:\\.|[^'\\])*(?:'|\z))/i, '\1' + REDACTED)
+    text = text.gsub(/((?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie)\s*["']?\s*[:=]\s*["']?)([^\s"'`,;}]+)/i, '\1' + REDACTED)
     text = text.gsub(%r{(https?://)[^\s/:@]+:[^\s/@]+@}, '\1' + REDACTED + '@')
     # High-entropy credential-like tokens; ordinary prose and short source IDs survive.
     text.gsub(/\b(?=[A-Za-z0-9_\-]{32,}\b)(?=[A-Za-z0-9_\-]*[a-z])(?=[A-Za-z0-9_\-]*[A-Z])(?=[A-Za-z0-9_\-]*\d)[A-Za-z0-9_\-]+\b/, REDACTED)
