@@ -25,6 +25,8 @@ export class MonitorStore {
       CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,at TEXT NOT NULL,actor TEXT NOT NULL,action TEXT NOT NULL,scope TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS producers(key TEXT PRIMARY KEY,sequence INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS session_titles(session_id TEXT PRIMARY KEY,title TEXT NOT NULL,updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS share_titles(share_id TEXT PRIMARY KEY,title TEXT NOT NULL);
     `);
     const columns = this.db.query('PRAGMA table_info(sessions)').all() as any[];
     if (!columns.some(c => c.name === 'activity')) this.db.exec("ALTER TABLE sessions ADD COLUMN activity TEXT NOT NULL DEFAULT 'conversation'");
@@ -140,18 +142,33 @@ export class MonitorStore {
   }
 
   sessions(search = '', before = '', limit = 100) {
-    return (this.db.query(`SELECT * FROM sessions WHERE (title LIKE ? OR model LIKE ?) AND (?='' OR updated_at||id < ?) ORDER BY updated_at DESC,id DESC LIMIT ?`)
-      .all(`%${search}%`,`%${search}%`,before,before,Math.min(limit,100)) as any[]).map(s => ({ ...s, usage: this.usage(s.id,undefined,false), shared: this.shares(s.id).some(x => !x.revoked_at && x.expires_at > new Date().toISOString()) }));
+    return (this.db.query(`SELECT s.*,t.title custom_title FROM sessions s LEFT JOIN session_titles t ON t.session_id=s.id WHERE (COALESCE(t.title,s.title) LIKE ? OR s.title LIKE ? OR s.model LIKE ?) AND (?='' OR s.updated_at||s.id < ?) ORDER BY s.updated_at DESC,s.id DESC LIMIT ?`)
+      .all(`%${search}%`,`%${search}%`,`%${search}%`,before,before,Math.min(limit,100)) as any[]).map(s => ({ ...this.presentSession(s), usage: this.usage(s.id,undefined,false), shared: this.shares(s.id).some(x => !x.revoked_at && x.expires_at > new Date().toISOString()) }));
   }
+  presentSession(s:any) {
+    return { ...s, requestPreview:s.title, title:s.custom_title || (s.activity==='title_generation'?'Создание названия чата':'Чат без названия'), customTitle:s.custom_title || null };
+  }
+  rename(id:string,title:unknown,actor:string) {
+    if (title!==null && (typeof title!=='string' || !title.trim() || Array.from(title.trim()).length>160 || /[\u0000-\u001f\u007f]/.test(title))) throw Error('invalid_title');
+    this.db.transaction(()=>{
+      if (!this.db.query('SELECT id FROM sessions WHERE id=?').get(id)) throw Error('not_found');
+      const at=new Date().toISOString();
+      if (title===null) this.db.query('DELETE FROM session_titles WHERE session_id=?').run(id);
+      else this.db.query('INSERT INTO session_titles VALUES(?,?,?) ON CONFLICT(session_id) DO UPDATE SET title=excluded.title,updated_at=excluded.updated_at').run(id,(title as string).trim(),at);
+      this.db.query('INSERT INTO audit(at,actor,action,scope) VALUES(?,?,?,?)').run(at,actor,title===null?'session.title.cleared':'session.title.updated',id);
+    })();
+    return this.session(id);
+  }
+  customTitle(id:string) { return (this.db.query('SELECT title FROM session_titles WHERE session_id=?').get(id) as any)?.title || null; }
   session(id: string, from?: string, before = Number.MAX_SAFE_INTEGER, offset = 0) {
-    const s = this.db.query('SELECT * FROM sessions WHERE id=?').get(id) as any;
+    const s = this.db.query('SELECT s.*,t.title custom_title FROM sessions s LEFT JOIN session_titles t ON t.session_id=s.id WHERE s.id=?').get(id) as any;
     if (!s) return null;
     const items = (this.db.query('SELECT * FROM items WHERE session_id=? AND (? IS NULL OR at>=?) AND seq<? ORDER BY seq DESC LIMIT 80 OFFSET ?').all(id,from ?? null,from ?? null,before,Math.max(0,Math.floor(offset))) as any[]).reverse()
       .map(r => ({ ...JSON.parse(r.body), at:r.at, seq:r.seq }));
     const attempts = this.db.query('SELECT * FROM attempts WHERE session_id=? AND (? IS NULL OR started_at>=?) ORDER BY started_at DESC LIMIT 300').all(id,from ?? null,from ?? null);
     const oldest=items[0]?.seq;
     const hasOlder=oldest ? !!this.db.query('SELECT 1 FROM items WHERE session_id=? AND (? IS NULL OR at>=?) AND seq<? LIMIT 1').get(id,from ?? null,from ?? null,oldest) : false;
-    return { ...s, items, hasOlder, oldest, attempts, usage:this.usage(id,from,false), cursor:this.cursor() };
+    return { ...this.presentSession(s), items, hasOlder, oldest, attempts, usage:this.usage(id,from,false), cursor:this.cursor() };
   }
   events(id: string, after = 0, from?: string) {
     return (this.db.query('SELECT * FROM events WHERE session_id=? AND seq>? AND (? IS NULL OR at>=?) ORDER BY seq LIMIT 500').all(id,after,from ?? null,from ?? null) as any[])
@@ -163,8 +180,11 @@ export class MonitorStore {
     if (!Number.isFinite(hours) || hours < 1 || hours > 168 || !Number.isFinite(Date.parse(from)) || Date.parse(from) > Date.now()) throw Error('invalid_share');
     const token = randomBytes(32).toString('base64url'); const id = randomBytes(16).toString('hex');
     const now = new Date().toISOString(), expiry = new Date(Date.now()+hours*3_600_000).toISOString();
-    this.db.query('INSERT INTO shares VALUES(?,?,?,?,?,?,?)').run(id,this.hash(token),sessionId,from,expiry,null,now);
-    this.audit(actor,'share.create',id);
+    this.db.transaction(()=>{
+      this.db.query('INSERT INTO shares VALUES(?,?,?,?,?,?,?)').run(id,this.hash(token),sessionId,from,expiry,null,now);
+      this.db.query('INSERT INTO share_titles VALUES(?,?)').run(id,this.customTitle(sessionId) || 'Чат без названия');
+      this.audit(actor,'share.create',id);
+    })();
     return { id,token,expiresAt:expiry };
   }
   hash(token:string) { return createHash('sha256').update(token).digest('hex'); }
@@ -176,7 +196,7 @@ export class MonitorStore {
     // Public discovery uses safe share IDs, never raw tokens or private session IDs.
     return rows.map(s => {
       const share = this.db.query('SELECT id,start_at FROM shares WHERE session_id=? AND revoked_at IS NULL AND expires_at>? ORDER BY created_at DESC LIMIT 1').get(s.id,new Date().toISOString()) as any;
-      return { id:share.id,title:this.publicTitle(s.id,share.start_at),model:s.model,updatedAt:s.updated_at };
+      return { id:share.id,title:this.shareTitle(share.id),model:s.model,updatedAt:s.updated_at };
     });
   }
   publicShareById(id:string) { return this.db.query('SELECT * FROM shares WHERE id=? AND revoked_at IS NULL AND expires_at>?').get(id,new Date().toISOString()) as any; }
@@ -184,25 +204,12 @@ export class MonitorStore {
     const row=this.db.query('SELECT MAX(seq) seq FROM events WHERE session_id=? AND at>=?').get(share.session_id,share.start_at) as any;
     return this.hash(`${share.session_id}/${share.start_at}/${row.seq||0}`).slice(0,32);
   }
-  publicTitle(id:string,from:string) {
-    let display: SessionDisplay = { title: '', activity: 'conversation' };
-    let after = 0;
-    while (true) {
-      const rows = this.db.query("SELECT seq,body FROM items WHERE session_id=? AND at>=? AND seq>? AND json_extract(body,'$.role') IN ('user','assistant') ORDER BY seq LIMIT 32").all(id,from,after) as any[];
-      for (const r of rows) {
-        display = nextDisplay(display, JSON.parse(r.body));
-        if (display.title && (display.activity === 'conversation' || display.title.startsWith('Название чата: '))) return display.title;
-        after = r.seq;
-      }
-      if (rows.length < 32) break;
-    }
-    return display.title || 'Рабочая сессия Codex';
-  }
+  shareTitle(id?:string) { return id ? (this.db.query('SELECT title FROM share_titles WHERE share_id=?').get(id) as any)?.title || 'Чат без названия' : 'Чат без названия'; }
   publicSnapshot(share:any,before = 0) {
     const s = this.session(share.session_id,share.start_at,Number.MAX_SAFE_INTEGER,before);
     if (!s) return null;
     const { model,status,updated_at,items,usage,partial,hasOlder } = s;
-    return { title:this.publicTitle(share.session_id,share.start_at),model,status,updated_at,partial,cursor:this.publicCursor(share),oldest:before+items.length,hasOlder,expiresAt:share.expires_at,
+    return { title:share.id?this.shareTitle(share.id):this.customTitle(share.session_id)||'Чат без названия',model,status,updated_at,partial,cursor:this.publicCursor(share),oldest:before+items.length,hasOlder,expiresAt:share.expires_at,
       items:items.map(({ itemId,kind,role,name,text,at,complete,truncated,segment,groupId }:any) => ({ itemId:this.hash(`${share.id}/${itemId}`).slice(0,32),kind,role,name,text,at,complete,truncated,segment,groupId })),
       usage:{ input:usage.input,output:usage.output,total:usage.total,cached:usage.cached,reasoning:usage.reasoning,quality:usage.quality,buckets:usage.buckets } };
   }
@@ -215,6 +222,8 @@ export class MonitorStore {
       this.db.query('DELETE FROM usage WHERE at<?').run(ledgerCutoff);
       this.db.query('DELETE FROM attempts WHERE updated_at<?').run(ledgerCutoff);
       this.db.query('DELETE FROM sessions WHERE updated_at<?').run(ledgerCutoff);
+      this.db.query('DELETE FROM session_titles WHERE session_id NOT IN (SELECT id FROM sessions)').run();
+      this.db.query('DELETE FROM share_titles WHERE share_id IN (SELECT id FROM shares WHERE expires_at<? OR revoked_at IS NOT NULL)').run(new Date(now).toISOString());
     })();
     this.db.exec('PRAGMA wal_checkpoint(PASSIVE)');
   }

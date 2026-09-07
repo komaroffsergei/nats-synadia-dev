@@ -88,7 +88,7 @@ const server=Bun.serve<PeerData>({
       if (path==='/api/v1/monitor/sessions' && req.method==='GET') return json({sessions:store.sessions(url.searchParams.get('q') || '',url.searchParams.get('before') || ''),cursor:store.cursor()});
       if (path==='/api/v1/monitor/usage' && req.method==='GET') return json(store.usage());
       if (path==='/api/v1/monitor/connections' && req.method==='GET') return json(connectionState());
-      const match=path.match(/^\/api\/v1\/monitor\/sessions\/([a-f0-9]{32})(?:\/(events|shares|preview))?$/);
+      const match=path.match(/^\/api\/v1\/monitor\/sessions\/([a-f0-9]{32})(?:\/(events|shares|preview|title))?$/);
       if (match) {
         const [,id,section]=match;
         if (!store.session(id)) return json({error:'not_found'},404);
@@ -102,6 +102,12 @@ const server=Bun.serve<PeerData>({
           const body=await req.json();
           return json(store.createShare(id,body.from || new Date().toISOString(),body.hours ?? 24,String(actor)),201);
         }
+        if (section==='title' && req.method==='PATCH') {
+          const body=await req.json(),session=store.rename(id,body.title,String(actor));
+          // Owner metadata is not a fabricated proxy event and never changes public shares.
+          for (const ws of peers) if (ws.data.owner && !ws.data.share) ws.data.cursor=-1;
+          notify();return json(session);
+        }
       }
       const revoke=path.match(/^\/api\/v1\/monitor\/shares\/([a-f0-9]{32})$/);
       if (revoke && req.method==='DELETE') {
@@ -110,7 +116,7 @@ const server=Bun.serve<PeerData>({
       return json({error:'not_found'},404);
     } catch (error) {
       const code=(error as Error).message;
-      return json({error:code==='invalid_share'?'invalid_share':'request_failed'},400);
+      return json({error:['invalid_share','invalid_title'].includes(code)?code:'request_failed'},400);
     }
   },
   websocket:{

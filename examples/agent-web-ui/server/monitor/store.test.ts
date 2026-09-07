@@ -96,7 +96,7 @@ test('service wrappers stay intact, while a mixed user request supplies the titl
  expect(displayParts({role:'assistant',text})).toEqual([{text,context:false}]);
  const s=create(),a=event('item.snapshot',{itemId:'ctx',role:'user',text:'<environment_context>cwd</environment_context>'});s.apply(a);
  s.apply(event('item.snapshot',{itemId:'request',role:'user',text,context:true}));
- expect(s.session(s.scopeId(a))?.title).toBe('Проверь связь');
+ expect(s.session(s.scopeId(a))?.requestPreview).toBe('Проверь связь');
  expect(s.session(s.scopeId(a))?.items.map((i:any)=>i.text)).toContain(text);
 });
 
@@ -106,7 +106,7 @@ test('title generation is a labelled service activity, never inferred from a mod
  s.apply(event('item.snapshot',{itemId:'prompt',role:'user',text:prompt}));
  s.apply(event('item.snapshot',{itemId:'reply',role:'assistant',text:'{"title":"Проверить связь"}',complete:true}));
  expect(s.session(s.scopeId(a))?.activity).toBe('title_generation');
- expect(s.session(s.scopeId(a))?.title).toBe('Название чата: Проверить связь');
+ expect(s.session(s.scopeId(a))?.requestPreview).toBe('Название чата: Проверить связь');
  expect(displayParts({role:'user',text:prompt})).toEqual([{text:prompt,context:true}]);
  const other=event('item.snapshot',{itemId:'prompt',role:'user',text:'Проверь связь'},{sessionId:'other'});s.apply(other);
  expect(s.sessions()).toHaveLength(2);expect(s.session(s.scopeId(other))?.activity).toBe('conversation');
@@ -117,8 +117,10 @@ test('public title skips service context and respects publication start time',()
  const a=event('item.snapshot',{itemId:'old',role:'user',text:'Private title'},{at:old});s.apply(a);
  s.apply(event('item.snapshot',{itemId:'ctx',role:'user',text:'<environment_context>Private workspace</environment_context>'},{at:now}));
  s.apply(event('item.snapshot',{itemId:'current',role:'user',text:'Публичный вопрос'},{at:now}));
- expect(s.publicTitle(s.scopeId(a),now)).toBe('Публичный вопрос');
- expect(s.publicTitle(s.scopeId(a),'2026-09-07T12:00:00.000Z')).toBe('Рабочая сессия Codex');
+ const snapshot=s.publicSnapshot({session_id:s.scopeId(a),start_at:now});
+ expect(snapshot!.title).toBe('Чат без названия');
+ expect(JSON.stringify(snapshot)).not.toContain('Private title');
+ expect(JSON.stringify(snapshot)).toContain('Публичный вопрос');
 });
 
 test('existing history is relabelled once on upgrade without changing items or usage',()=>{
@@ -131,7 +133,7 @@ test('existing history is relabelled once on upgrade without changing items or u
   const id=s.scopeId(a),before=s.session(id)!.items;
   s.db.exec("DELETE FROM state WHERE key='displayVersion'; UPDATE sessions SET title='<recommended_plugins>Tools</recommended_plugins>'");
   s.db.close();s=new MonitorStore(path);
-  expect(s.session(id)!.title).toBe('Проверь связь');expect(s.session(id)!.items).toEqual(before);expect(s.usage().total).toBe(120);
+  expect(s.session(id)!.requestPreview).toBe('Проверь связь');expect(s.session(id)!.items).toEqual(before);expect(s.usage().total).toBe(120);
   expect(s.state('displayVersion')).toBe(1);
  } finally {s.db.close();rmSync(dir,{recursive:true,force:true});}
 });
@@ -146,4 +148,36 @@ test('public items have distinct share-scoped identities even at the same timest
  expect(new Set(items.map((i:any)=>i.itemId)).size).toBe(2);
  expect(items[0].itemId).not.toBe(s.publicSnapshot(s.share(second.token))!.items[0].itemId);
  expect(JSON.stringify(items)).not.toContain('original-');
+});
+
+test('manual title wins over later proxy events, is searchable and never changes text or usage',()=>{
+ const s=create(),a=event('item.snapshot',{itemId:'prompt',role:'user',text:'First prompt'});s.apply(a);
+ s.apply(event('usage.snapshot',{input:100,output:20,total:120,revision:1}));
+ const id=s.scopeId(a),items=s.session(id)!.items,cursor=s.cursor();
+ expect(s.session(id)!.title).toBe('Чат без названия');expect(s.session(id)!.requestPreview).toBe('First prompt');
+ s.rename(id,'Проверить связь с Кодексом','owner');
+ expect(s.session(id)!.title).toBe('Проверить связь с Кодексом');expect(s.session(id)!.items).toEqual(items);expect(s.usage().total).toBe(120);expect(s.cursor()).toBe(cursor);
+ s.apply(event('item.snapshot',{itemId:'next',role:'user',text:'Another prompt'}));
+ expect(s.session(id)!.title).toBe('Проверить связь с Кодексом');expect(s.sessions('Проверить связь')).toHaveLength(1);
+ s.rename(id,null,'owner');expect(s.session(id)!.title).toBe('Чат без названия');expect(s.session(id)!.customTitle).toBeNull();
+ for(const value of ['', ' ', 123, undefined, 'a'.repeat(161), 'line\nbreak'])expect(()=>s.rename(id,value,'owner')).toThrow('invalid_title');
+});
+
+test('manual name survives reopening and stays within its session',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'monitor-title-test-')),path=join(dir,'test.sqlite');let s=new MonitorStore(path);
+ try {
+  const a=event('request.started');s.apply(a);const id=s.scopeId(a);
+  const b=event('request.started',{},{sessionId:'other',attemptId:'other'});s.apply(b);
+  s.rename(id,'Мой чат','owner');s.db.close();s=new MonitorStore(path);
+  expect(s.session(id)!.title).toBe('Мой чат');expect(s.session(s.scopeId(b))!.title).toBe('Чат без названия');
+ } finally {s.db.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('publication captures the chosen name and a later private rename does not leak to visitors',()=>{
+ const s=create(),a=event('item.snapshot',{itemId:'prompt',role:'user',text:'Some prompt'});s.apply(a);const id=s.scopeId(a);
+ s.rename(id,'Название для публикации','owner');const sh=s.createShare(id,'1970-01-01T00:00:00.000Z',1,'owner'),share=s.share(sh.token);
+ const cursor=s.publicCursor(share);s.rename(id,'Новое частное название','owner');
+ expect(s.publicSnapshot(share)!.title).toBe('Название для публикации');expect(s.publicSessions()[0].title).toBe('Название для публикации');expect(s.publicCursor(share)).toBe(cursor);
+ expect(s.publicSnapshot({session_id:id,start_at:'1970-01-01T00:00:00.000Z'})!.title).toBe('Новое частное название');
+ expect(JSON.stringify(s.publicSnapshot(share))).not.toContain('Новое частное название');
 });
