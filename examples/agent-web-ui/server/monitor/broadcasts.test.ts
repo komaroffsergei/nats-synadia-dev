@@ -56,6 +56,39 @@ const config = (sid: string, mode = 'replay') => ({
   loop: true,
   skipPauses: true,
 });
+
+test('available range includes only selected session snapshots that have arrived', () => {
+  const { monitor,b,sid } = fixture();
+  monitor.apply(evt('OTHER', { sessionId: 'other', at: new Date(now-50000).toISOString() }));
+  monitor.apply(evt('future', { at: new Date(now+86400000).toISOString() }));
+  const range = b.range(sid);
+  expect(range.snapshots).toBe(1);
+  expect(Date.parse(range.firstAt)).toBeGreaterThan(now-40000);
+  expect(Date.parse(range.lastAt)).toBeLessThan(Date.parse(range.serverNow));
+  expect(() => b.range('bad')).toThrow('not_found');
+  expect(b.list()).toEqual([]);
+});
+
+test('large recording is shortened only on explicit request, stays inside range and remains private', () => {
+  const { monitor,b,sid } = fixture();
+  const start = now-120000;
+  for (let i=0;i<60;i++) monitor.apply(evt('x'.repeat(180000)+i, {
+    at:new Date(start+i*1000).toISOString(),
+  }));
+  const body = {...config(sid),from:new Date(start).toISOString(),to:new Date(start+60000).toISOString()};
+  expect(() => b.prepare(body,'owner')).toThrow('recording_too_large');
+  const result = b.prepare({...body,fit:true},'owner');
+  expect(result.adjusted).toBe(true);
+  expect(result.config.from > body.from).toBe(true);
+  expect(result.config.to <= body.to).toBe(true);
+  expect(Buffer.byteLength(JSON.stringify(result.preview.frames))).toBeLessThan(8*1024*1024);
+  expect(result.preview.frames.length).toBeGreaterThan(0);
+  expect(result.preview.frames.every((f:any) => f.item.at>=result.config.from && f.item.at<=result.config.to)).toBe(true);
+  expect(b.list()).toEqual([]);
+  const exact = b.prepare({...body,from:result.config.from,to:result.config.to},'owner');
+  expect(exact.adjusted).toBe(false);
+  expect(exact.preview.frames.map((f:any)=>f.item.text)).toEqual(result.preview.frames.map((f:any)=>f.item.text));
+});
 test('no implicit publication, preview is private and publish requires the same owner', () => {
   const { b, sid } = fixture();
   expect(b.list()).toEqual([]);

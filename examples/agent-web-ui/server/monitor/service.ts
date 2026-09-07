@@ -104,6 +104,7 @@ const server=Bun.serve<PeerData>({
         return snapshot?json(snapshot):json({error:'broadcast_unavailable'},410);
       }
       if(path==='/api/v1/monitor/broadcasts' && req.method==='GET')return json(broadcasts.list(true));
+      if(path==='/api/v1/monitor/broadcasts/range' && req.method==='GET')return json(broadcasts.range(url.searchParams.get('sessionId') || ''));
       if(path==='/api/v1/monitor/broadcasts/preview' && req.method==='POST')return json(broadcasts.prepare(await req.json(),String(actor)));
       if(path==='/api/v1/monitor/broadcasts' && req.method==='POST') {
         const body=await req.json(),result=broadcasts.publish(body.draftId,String(actor));notify();return json(result,201);

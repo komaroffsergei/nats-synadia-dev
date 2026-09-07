@@ -1,19 +1,48 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import MonitorTimelineItem from './MonitorTimelineItem.vue';
+import { localDateTime as local, recordingInputs, rangeProblem, type RecordingRange } from '../broadcast-range';
 const props = defineProps<{ sessions: any[]; selectedId?: string }>();
 const rows = ref<any[]>([]),
   sessionId = ref(props.selectedId || ''),
   title = ref(''),
   mode = ref('live');
-const local = (at: number) => {
-  const d = new Date(at);
-  return new Date(at - d.getTimezoneOffset() * 60000)
-    .toISOString()
-    .slice(0, 19);
-};
 const from = ref(local(Date.now() - 3600000)),
   to = ref(local(Date.now() - 1000));
+const available = ref<RecordingRange | null>(null), rangeLoading = ref(false), rangeError = ref('');
+const serverNow = ref(Date.now()), canFit = ref(false);
+let clockBase = Date.now(), clockReceived = performance.now(), rangeGeneration = 0;
+const clock = setInterval(() => { serverNow.value = clockBase + performance.now() - clockReceived; }, 1000);
+onUnmounted(() => { clearInterval(clock); rangeGeneration++; });
+const formatDate = (value: string | number) => new Date(value).toLocaleString('ru-RU');
+const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const dateErrors: Record<string, string> = {
+  empty: 'Укажите начало и конец фрагмента.',
+  future_start: 'Начало фрагмента находится в будущем. Проверьте день и месяц.',
+  future_end: 'Конец фрагмента находится в будущем. Проверьте день и месяц.',
+  order: 'Конец фрагмента должен быть позже начала.',
+  unavailable: 'В сессии пока нет сохранённых текстовых событий для записи.',
+  outside: 'В выбранный период события не попадают. Доступные даты указаны ниже.',
+};
+const dateError = computed(() => dateErrors[rangeProblem(from.value, to.value, mode.value, serverNow.value, available.value)] || '');
+async function loadRange(id: string) {
+  const generation = ++rangeGeneration;
+  available.value = null; rangeError.value = ''; rangeLoading.value = true;
+  try {
+    const value = await api('/range?sessionId=' + encodeURIComponent(id));
+    if (generation !== rangeGeneration) return;
+    available.value = value; clockBase = Date.parse(value.serverNow); clockReceived = performance.now(); serverNow.value = clockBase;
+    useRange(mode.value === 'replay' ? 5 : undefined);
+  } catch (e) {
+    if (generation === rangeGeneration) rangeError.value = (e as Error).message;
+  } finally { if (generation === rangeGeneration) rangeLoading.value = false; }
+}
+function useRange(minutes?: number) {
+  if (!available.value) return;
+  const inputs = recordingInputs(available.value, minutes);
+  if (inputs) { from.value = inputs.from; to.value = inputs.to; }
+  error.value = ''; canFit.value = false;
+}
 const loop = ref(true),
   speed = ref(1),
   skipPauses = ref(true),
@@ -27,7 +56,7 @@ const messages: Record<string, string> = {
   recording_unavailable:
     'В этом периоде нет сохранённых событий. Выберите другой период: обычная история хранится 24 часа.',
   recording_too_large:
-    'Запись слишком большая. Выберите более короткий фрагмент (до 8 MiB и 6000 событий).',
+    'Фрагмент превышает 8 MiB или 6000 изменений текста. Сократите период или нажмите «Подобрать фрагмент по лимиту» — будет выбран конец указанного периода.',
   archive_limit:
     'Архив заполнен: максимум 128 MiB или 50 публикаций. Удалите ненужные записи.',
   preview_expired: 'Предварительный просмотр устарел. Подготовьте его ещё раз.',
@@ -43,12 +72,12 @@ async function api(path = '', init?: RequestInit) {
   });
   const data = await r.json();
   if (!r.ok)
-    throw Error(
+    throw Object.assign(Error(
       messages[data.error] ||
         (r.status === 401
           ? 'Нужен вход владельца'
           : 'Не удалось сохранить изменения. Проверьте заполненные поля.'),
-    );
+    ), { code: data.error });
   return data;
 }
 const request = (method: string, body: any) => ({
@@ -67,10 +96,13 @@ watch(sessionId, (id) => {
       Math.max(Date.parse(s.first_at), Date.now() - 24 * 3600000),
     );
   draft.value = null;
+  error.value = ''; canFit.value = false;
+  if (id) void loadRange(id);
 });
 watch([title, mode, from, to, loop, speed, skipPauses, position], () => {
-  draft.value = null;
+  draft.value = null; error.value = ''; notice.value = ''; canFit.value = false;
 });
+watch(mode, (value) => { if (value === 'replay' && available.value) useRange(5); });
 const previewItems = computed(() => {
   if (!draft.value) return [];
   const p = draft.value.preview;
@@ -79,27 +111,35 @@ const previewItems = computed(() => {
   for (const f of p.frames) map.set(f.item.itemId, f.item);
   return [...map.values()];
 });
-async function preview() {
+async function preview(fit = false) {
+  if (dateError.value || rangeLoading.value || rangeError.value) return;
   busy.value = true;
   error.value = '';
   notice.value = '';
   try {
-    draft.value = await api(
+    const result = await api(
       '/preview',
       request('POST', {
         sessionId: sessionId.value,
         title: title.value,
         mode: mode.value,
         from: new Date(from.value).toISOString(),
-        to: new Date(to.value).toISOString(),
+        ...(mode.value === 'replay' ? { to: new Date(to.value).toISOString(), fit } : {}),
         loop: loop.value,
         speed: Number(speed.value),
         skipPauses: skipPauses.value,
         position: Number(position.value),
       }),
     );
+    if (result.adjusted) {
+      from.value = local(Date.parse(result.config.from)); to.value = local(Date.parse(result.config.to));
+      await nextTick();
+      notice.value = `Подобран фрагмент: ${formatDate(result.config.from)} — ${formatDate(result.config.to)}. Период сокращён по лимиту; проверьте текст ниже перед публикацией.`;
+    }
+    canFit.value = false; draft.value = result;
   } catch (e) {
     error.value = (e as Error).message;
+    canFit.value = (e as any).code === 'recording_too_large' && mode.value === 'replay';
   } finally {
     busy.value = false;
   }
@@ -157,6 +197,7 @@ onMounted(() => {
     );
   }
   void refresh().catch((e) => (error.value = e.message));
+  if (sessionId.value) void loadRange(sessionId.value);
 });
 </script>
 
@@ -178,12 +219,13 @@ onMounted(() => {
       >
     </div>
     <p v-if="error" role="alert" class="notice error">{{ error }}</p>
+    <button v-if="canFit" class="primary fit-button" :disabled="busy || !!dateError" @click="preview(true)">Подобрать фрагмент по лимиту</button>
     <p v-if="notice" role="status" class="notice">{{ notice }}</p>
     <div class="manager-grid">
-      <form @submit.prevent="preview" class="editor">
+      <form @submit.prevent="preview()" class="editor">
         <h3>Новая публикация</h3>
         <label for="broadcast-session"
-          >Сессия<select id="broadcast-session" v-model="sessionId" required>
+          >Сессия<select id="broadcast-session" v-model="sessionId" required :disabled="busy">
             <option value="" disabled>Выберите сессию</option>
             <option v-for="s in sessions" :key="s.id" :value="s.id">
               {{ s.title }} · {{ s.model || 'модель неизвестна' }}
@@ -193,12 +235,13 @@ onMounted(() => {
         <label
           >Название для посетителей<input
             v-model="title"
+            :disabled="busy"
             maxlength="160"
             required
             placeholder="Например: Массовый импорт GeoJSON"
         /></label>
         <label
-          >Режим<select v-model="mode">
+          >Режим<select v-model="mode" :disabled="busy">
             <option value="live">Прямой эфир</option>
             <option value="replay">Запись с повтором</option>
           </select></label
@@ -207,35 +250,53 @@ onMounted(() => {
           <label
             >Начало фрагмента<input
               v-model="from"
+              :disabled="busy || rangeLoading"
               type="datetime-local"
               step="1"
+              :max="local(serverNow)"
+              :aria-invalid="!!dateError"
+              aria-describedby="recording-period"
               required /></label
           ><label v-if="mode === 'replay'"
             >Конец фрагмента<input
               v-model="to"
+              :disabled="busy || rangeLoading"
               type="datetime-local"
               step="1"
+              :max="local(serverNow)"
+              :aria-invalid="!!dateError"
+              aria-describedby="recording-period"
               required
           /></label>
         </div>
+        <div id="recording-period" class="range-help">
+          <p class="help">Часовой пояс: {{ timeZone }}. Сейчас на сервере: {{ formatDate(serverNow) }}.</p>
+          <p v-if="rangeLoading" class="help">Проверяем доступную историю…</p>
+          <p v-else-if="rangeError" role="alert" class="notice error">{{ rangeError }} <button type="button" @click="loadRange(sessionId)">Повторить</button></p>
+          <template v-else-if="available?.firstAt && available?.lastAt">
+            <p class="help">Доступные события: {{ formatDate(available.firstAt) }} — {{ formatDate(available.lastAt) }}.</p>
+            <div class="range-actions"><button type="button" @click="useRange()" :disabled="busy">Вся доступная история</button><button v-if="mode === 'replay'" type="button" @click="useRange(5)" :disabled="busy">Последние 5 минут сессии</button></div>
+          </template>
+          <p v-if="dateError" role="alert" class="notice error">{{ dateError }}</p>
+        </div>
         <p class="help">
-          Время вашего браузера.
           {{
             mode === 'live'
               ? 'Публикуется история с выбранного начала и новые события этой сессии.'
-              : 'Запись хранится отдельно от 24-часовой истории и ничего не запускает повторно.'
+              : 'По умолчанию выбран конец сессии: до 5 минут. Можно изменить период. Запись хранится отдельно от 24-часовой истории и ничего не запускает повторно.'
           }}
         </p>
         <div class="fields">
           <label
             >Порядок в эфире<input
               v-model.number="position"
+              :disabled="busy"
               type="number"
               min="0"
               max="999"
               required /></label
           ><label v-if="mode === 'replay'"
-            >Скорость<select v-model.number="speed">
+            >Скорость<select v-model.number="speed" :disabled="busy">
               <option :value="0.5">0.5×</option>
               <option :value="1">1×</option>
               <option :value="2">2×</option>
@@ -245,13 +306,13 @@ onMounted(() => {
         </div>
         <template v-if="mode === 'replay'"
           ><label class="check"
-            ><input v-model="loop" type="checkbox" /> Повторять по кругу</label
+            ><input v-model="loop" type="checkbox" :disabled="busy" /> Повторять по кругу</label
           ><label class="check"
-            ><input v-model="skipPauses" type="checkbox" /> Пропускать паузы
+            ><input v-model="skipPauses" type="checkbox" :disabled="busy" /> Пропускать паузы
             длиннее 3 секунд</label
           ></template
         >
-        <button type="submit" class="primary" :disabled="busy || !sessionId">
+        <button type="submit" class="primary" :disabled="busy || !sessionId || rangeLoading || !!rangeError || !!dateError">
           {{ busy ? 'Подготовка…' : 'Предварительный просмотр' }}
         </button>
       </form>
@@ -415,6 +476,11 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.range-help { padding: 12px; border: var(--border-light); border-radius: 5px; }
+.range-help .notice { margin: 12px 0 0; }
+.range-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.fit-button { margin: 0 0 18px; }
+input[type='datetime-local'] { color-scheme: dark; }
 .revisions {
   margin-block: 18px;
   font-size: 12px;

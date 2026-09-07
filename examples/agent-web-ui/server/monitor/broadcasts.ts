@@ -135,6 +135,15 @@ export class BroadcastStore {
     const row = this.row(id);
     return row?.visible ? this.snapshot(row, before) : null;
   }
+  range(sessionId: string) {
+    if (!idPattern.test(sessionId) || !this.monitor.db.query('SELECT id FROM sessions WHERE id=?').get(sessionId))
+      throw Error('not_found');
+    const now = new Date().toISOString();
+    const range = this.monitor.db.query(
+      "SELECT MIN(at) firstAt,MAX(at) lastAt,COUNT(*) snapshots FROM events WHERE session_id=? AND type='item.snapshot' AND at<=?",
+    ).get(sessionId, now) as any;
+    return { ...range, serverNow: now };
+  }
   prepare(body: any, actor: string) {
     if (
       !body ||
@@ -156,6 +165,8 @@ export class BroadcastStore {
       to = body.mode === 'replay' ? iso(body.to) : null;
     if (from > now || (to && (to <= from || to > now)))
       throw Error('invalid_range');
+    if (body.fit !== undefined && (typeof body.fit !== 'boolean' || body.mode !== 'replay'))
+      throw Error('invalid_broadcast');
     for (const key of ['loop', 'skipPauses'])
       if (body[key] !== undefined && typeof body[key] !== 'boolean')
         throw Error('invalid_broadcast');
@@ -188,7 +199,23 @@ export class BroadcastStore {
       summary: '{}',
     };
     if (to) {
-      const recorded = this.record(row);
+      let recorded;
+      while (true) {
+        try { recorded = this.record(row); break; }
+        catch (error) {
+          if (!body.fit || (error as Error).message !== 'recording_too_large') throw error;
+          // Only an explicit fit request may shorten the owner's selected range.
+          // Remove a quiet tail first, then keep the latter half of the fragment.
+          const last = this.monitor.db.query(
+            "SELECT MAX(at) at FROM events WHERE session_id=? AND type='item.snapshot' AND at>=? AND at<=?",
+          ).get(row.session_id, row.start_at, row.end_at) as any;
+          const end = Math.min(Date.parse(row.end_at), Math.ceil(Date.parse(last.at) / 1000) * 1000);
+          const start = Date.parse(row.start_at);
+          if (!Number.isFinite(end) || end - start <= 1000) throw error;
+          row.end_at = new Date(end).toISOString();
+          row.start_at = new Date(Math.min(end - 1000, Math.floor((start + end) / 2000) * 1000)).toISOString();
+        }
+      }
       row.recording = JSON.stringify(recorded);
       row.summary = JSON.stringify({
         model: recorded.model,
@@ -233,6 +260,7 @@ export class BroadcastStore {
       expiresInSeconds: 900,
       preview,
       config: this.metadata(row, true),
+      adjusted: row.start_at !== from || row.end_at !== to,
     };
   }
   record(row: any) {
