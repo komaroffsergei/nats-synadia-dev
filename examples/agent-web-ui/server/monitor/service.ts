@@ -46,7 +46,7 @@ function publicShare(id:string) {
   return /^[a-f0-9]{32}$/.test(id) ? store.publicShareById(id) : store.share(id);
 }
 function connectionState() {
-  return { nats:natsConnected?'connected':'reconnecting',ingestionError,source:store.state('source'),projector:store.state('projector'),
+  return { serverTimeMs:Date.now(),nats:natsConnected?'connected':'reconnecting',ingestionError,source:store.state('source'),projector:store.state('projector'),
     gap:store.state('sequenceGap'),ingest:store.state('ingest'),retentionHours:24,ledgerDays:90,sourceLabel:'Codex proxy', legacy:store.state('legacy') };
 }
 
@@ -92,7 +92,7 @@ const server=Bun.serve<PeerData>({
         if (req.method==='GET') {
           if (section==='events') return json({events:store.events(id,Math.max(0,Number(url.searchParams.get('after'))||0)),cursor:store.cursor()});
           if (section==='shares') return json(store.shares(id));
-          if (section==='preview') return json(store.publicSnapshot({session_id:id,start_at:url.searchParams.get('from')||'1970-01-01T00:00:00.000Z',expires_at:null}));
+          if (section==='preview') return json(store.publicSnapshot({session_id:id,start_at:url.searchParams.get('from')||'1970-01-01T00:00:00.000Z',expires_at:null},Number(url.searchParams.get('before'))||undefined));
           return json(store.session(id,undefined,Number(url.searchParams.get('before'))||undefined));
         }
         if (section==='shares' && req.method==='POST') {

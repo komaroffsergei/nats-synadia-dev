@@ -118,7 +118,13 @@ watch(tab,()=>{if(tab.value==='traffic')void detailExtras().catch(e=>error.value
 const fromValue=()=>shareFrom.value==='now'?new Date().toISOString():new Date(Date.now()-24*3600_000).toISOString();
 async function openPreview() {
   error.value='';shareLink.value='';
-  try{preview.value=await api(`/api/v1/monitor/sessions/${selectedId.value}/preview?from=${encodeURIComponent(fromValue())}`);showPublish.value=true;}
+  try{
+    const id=selectedId.value,path=`/api/v1/monitor/sessions/${id}/preview?from=${encodeURIComponent(fromValue())}`;
+    const data=await api(path);let page=data;
+    while(page.hasOlder){page=await api(`${path}&before=${page.oldest}`);data.items=[...page.items,...data.items];}
+    if(id!==selectedId.value)return;
+    preview.value=data;showPublish.value=true;
+  }
   catch(e){error.value=(e as Error).message;}
 }
 async function publish() {
