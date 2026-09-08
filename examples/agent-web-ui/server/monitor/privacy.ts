@@ -46,9 +46,14 @@ function publicIdentityMarker(key: string) {
 function sanitizePublicStructured(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sanitizePublicStructured);
   if (value && typeof value === 'object') {
+    const usedKeys = new Map<string, number>();
     return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+      const baseKey = redactPublicText(key);
+      const duplicate = usedKeys.get(baseKey) ?? 0;
+      usedKeys.set(baseKey, duplicate + 1);
+      const publicKey = duplicate ? `${baseKey} #${duplicate + 1}` : baseKey;
       const identity = publicIdentityMarker(key);
-      return [key, identity ?? (sensitiveKey(key) ? REDACTED : sanitizePublicStructured(item))];
+      return [publicKey, identity ?? (sensitiveKey(key) ? REDACTED : sanitizePublicStructured(item))];
     }));
   }
   return typeof value === 'string' ? redactPublicText(value) : value;
@@ -77,7 +82,7 @@ export function redactPublicText(input: unknown, options: { kind?: string } = {}
   let text = redactStoredText(raw);
   if ((options.kind === 'tool_call' || options.kind === 'tool_result') && privateToolOperation(text)) return PRIVATE_OPERATION;
   if (/vdsina\.(?:ru|com)/i.test(text)) text = text.replace(/https?:\/\/(?:cp\.)?vdsina\.(?:ru|com)\/[^\s"'<>)]*/gi, '[СЛУЖЕБНАЯ ССЫЛКА]');
-  if (/:\\*\/*Users[\\/]/i.test(text)) text = text.replace(/\b[A-Z]:[\\/]+Users[\\/]+[^\s"'<>`,;)]+/gi, '[РАБОЧАЯ ПАПКА]');
+  if (/:\\*\/*Users[\\/]/i.test(text)) text = text.replace(/[A-Z]:[\\/]+Users[\\/]+[^\s"'<>`,;)]+/gi, '[РАБОЧАЯ ПАПКА]');
   if (/\/(?:home|root)\//.test(text)) text = text.replace(/\/(?:home|root)\/[^\s"'<>`,;)]+/g, '[РАБОЧАЯ ПАПКА]');
   if (/\/(?:opt\/codex-proxy|srv\/portfolio|var\/lib\/docker|etc\/nginx)/.test(text)) text = text.replace(/\/(?:opt\/codex-proxy|srv\/portfolio|var\/lib\/docker|etc\/nginx)(?:\/[^\s"'<>`,;)]*)?/g, '[СЕРВЕРНЫЙ ПУТЬ]');
   if (/(?:\.htpasswd|mitm-ca\.key|\.env(?:\.|\b)|(?:keys|auth)\.json|credentials?\.(?:json|ya?ml))/i.test(text)) text = text.replace(/\S*(?:\.htpasswd\S*|mitm-ca\.key|[\w.-]*\.env(?:\.[\w.-]+)?|(?:keys|auth)\.json|credentials?\.(?:json|ya?ml))\S*/gi, '[СЕКРЕТНЫЙ ФАЙЛ]');

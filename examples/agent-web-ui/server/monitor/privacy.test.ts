@@ -37,6 +37,11 @@ test('public projection handles paths embedded as escaped command text', () => {
   const safe=redactPublicText(source);
   expect(safe).not.toContain('RealOwner');
   expect(safe).toContain('[РАБОЧАЯ ПАПКА]');
+
+  const escapedLineBreak=String.raw`tool output:\nC:/Users/EscapedOwner/project\nC:\\Users\\SecondOwner\\project`;
+  const escapedSafe=redactPublicText(escapedLineBreak);
+  expect(escapedSafe).not.toContain('EscapedOwner');
+  expect(escapedSafe).not.toContain('SecondOwner');
 });
 
 test('public projection anonymizes contacts, network addresses and embedded IDs', () => {
@@ -58,6 +63,17 @@ test('public projection replaces complete quoted and structured identity values'
   expect(structured.userLabel).toBe('[ПОЛЬЗОВАТЕЛЬ]');
   expect(structured.nested.configId).toBe('[КОНФИГУРАЦИЯ]');
   expect(structured.nested.session_id).toBe('[ИДЕНТИФИКАТОР]');
+});
+
+test('public projection redacts sensitive JSON object keys without dropping entries', () => {
+  const source=JSON.stringify({
+    'C:/Users/FirstOwner/project/a.ts':'first',
+    'C:/Users/SecondOwner/project/b.ts':'second',
+    'Authorization: Bearer bearer-key-value':'third',
+  });
+  const safe=redactPublicText(source);
+  for(const value of ['FirstOwner','SecondOwner','bearer-key-value']) expect(safe).not.toContain(value);
+  expect(Object.values(JSON.parse(safe))).toEqual(['first','second','third']);
 });
 
 test('credential-reading tool operations are summarized in public output', () => {
