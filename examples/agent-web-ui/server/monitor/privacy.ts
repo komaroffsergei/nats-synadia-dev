@@ -35,6 +35,25 @@ function sanitizeStructured(value: unknown): unknown {
   return typeof value === 'string' ? redactStoredText(value) : value;
 }
 
+function publicIdentityMarker(key: string) {
+  const value = key.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  if (/^(?:proxy_username|user_?label|proxy_user|monitor_users|username|login)$/.test(value)) return '[ПОЛЬЗОВАТЕЛЬ]';
+  if (/^(?:config_?id|active_config_id)$/.test(value)) return '[КОНФИГУРАЦИЯ]';
+  if (/^(?:session_?id|account_?id|tenant_?id|connection_?id)$/.test(value)) return '[ИДЕНТИФИКАТОР]';
+  return null;
+}
+
+function sanitizePublicStructured(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizePublicStructured);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+      const identity = publicIdentityMarker(key);
+      return [key, identity ?? (sensitiveKey(key) ? REDACTED : sanitizePublicStructured(item))];
+    }));
+  }
+  return typeof value === 'string' ? redactPublicText(value) : value;
+}
+
 export function redactStoredText(input: unknown) {
   const text = String(input ?? '');
   if (/^\s*[\[{]/.test(text)) {
@@ -50,16 +69,29 @@ function privateToolOperation(text: string) {
 }
 
 export function redactPublicText(input: unknown, options: { kind?: string } = {}) {
-  let text = redactStoredText(input);
+  const raw = String(input ?? '');
+  if (/^\s*[\[{]/.test(raw)) {
+    try { return JSON.stringify(sanitizePublicStructured(JSON.parse(raw))); }
+    catch { /* Incomplete or source-code JSON is handled by lexical rules. */ }
+  }
+  let text = redactStoredText(raw);
   if ((options.kind === 'tool_call' || options.kind === 'tool_result') && privateToolOperation(text)) return PRIVATE_OPERATION;
   if (/vdsina\.(?:ru|com)/i.test(text)) text = text.replace(/https?:\/\/(?:cp\.)?vdsina\.(?:ru|com)\/[^\s"'<>)]*/gi, '[СЛУЖЕБНАЯ ССЫЛКА]');
   if (/:\\*\/*Users[\\/]/i.test(text)) text = text.replace(/\b[A-Z]:[\\/]+Users[\\/]+[^\s"'<>`,;)]+/gi, '[РАБОЧАЯ ПАПКА]');
   if (/\/(?:home|root)\//.test(text)) text = text.replace(/\/(?:home|root)\/[^\s"'<>`,;)]+/g, '[РАБОЧАЯ ПАПКА]');
   if (/\/(?:opt\/codex-proxy|srv\/portfolio|var\/lib\/docker|etc\/nginx)/.test(text)) text = text.replace(/\/(?:opt\/codex-proxy|srv\/portfolio|var\/lib\/docker|etc\/nginx)(?:\/[^\s"'<>`,;)]*)?/g, '[СЕРВЕРНЫЙ ПУТЬ]');
   if (/(?:\.htpasswd|mitm-ca\.key|\.env(?:\.|\b)|(?:keys|auth)\.json|credentials?\.(?:json|ya?ml))/i.test(text)) text = text.replace(/\S*(?:\.htpasswd\S*|mitm-ca\.key|[\w.-]*\.env(?:\.[\w.-]+)?|(?:keys|auth)\.json|credentials?\.(?:json|ya?ml))\S*/gi, '[СЕКРЕТНЫЙ ФАЙЛ]');
-  if (/(?:proxy_username|userLabel|PROXY_USER|MONITOR_USERS|username|login)/i.test(text)) text = text.replace(/((?:proxy_username|userLabel|PROXY_USER|MONITOR_USERS|username|login)\s*["']?\s*[:=]\s*["']?)[^\s"'`,;}]+/gi, '$1[ПОЛЬЗОВАТЕЛЬ]');
-  if (/(?:configId|active_config_id|config_id)/i.test(text)) text = text.replace(/((?:configId|active_config_id|config_id)\s*["']?\s*[:=]\s*["']?)[^\s"'`,;}]+/gi, '$1[КОНФИГУРАЦИЯ]');
-  if (/(?:sessionId|session_id|accountId|account_id|tenantId|tenant_id|connectionId|connection_id)/i.test(text)) text = text.replace(/((?:sessionId|session_id|accountId|account_id|tenantId|tenant_id|connectionId|connection_id)\s*["']?\s*[:=]\s*["']?)[A-Za-z0-9:_./-]+/gi, '$1[ИДЕНТИФИКАТОР]');
+  const identityRules = [
+    ['(?:proxy_username|userLabel|PROXY_USER|MONITOR_USERS|username|login)', '[ПОЛЬЗОВАТЕЛЬ]'],
+    ['(?:configId|active_config_id|config_id)', '[КОНФИГУРАЦИЯ]'],
+    ['(?:sessionId|session_id|accountId|account_id|tenantId|tenant_id|connectionId|connection_id)', '[ИДЕНТИФИКАТОР]'],
+  ] as const;
+  for (const [keys, marker] of identityRules) {
+    if (!new RegExp(keys, 'i').test(text)) continue;
+    text = text.replace(new RegExp(`(${keys}\\s*["']?\\s*[:=]\\s*)"(?:\\\\.|[^"\\\\])*"`, 'gi'), `$1"${marker}"`);
+    text = text.replace(new RegExp(`(${keys}\\s*["']?\\s*[:=]\\s*)'(?:\\\\.|[^'\\\\])*'`, 'gi'), `$1'${marker}'`);
+    text = text.replace(new RegExp(`(${keys}\\s*["']?\\s*[:=]\\s*)[^\\s"'\`,;}]+`, 'gi'), `$1${marker}`);
+  }
   if (text.includes('@')) text = text.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[EMAIL]');
   text = text.replace(/(?<![\w.])(?:\+?\d[\s()-]*){10,15}(?![\w.])/g, '[ТЕЛЕФОН]');
   text = text.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, value => {

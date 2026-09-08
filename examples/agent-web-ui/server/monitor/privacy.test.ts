@@ -46,6 +46,20 @@ test('public projection anonymizes contacts, network addresses and embedded IDs'
   expect(safe).toContain('127.0.0.1');
 });
 
+test('public projection replaces complete quoted and structured identity values', () => {
+  const lexical='userLabel="Real Owner Name" config_id=owner-production session_id:\'private session value\'';
+  const safe=redactPublicText(lexical);
+  for(const value of ['Real Owner Name','owner-production','private session value']) expect(safe).not.toContain(value);
+  expect(safe).toContain('[ПОЛЬЗОВАТЕЛЬ]');
+  expect(safe).toContain('[КОНФИГУРАЦИЯ]');
+  expect(safe).toContain('[ИДЕНТИФИКАТОР]');
+
+  const structured=JSON.parse(redactPublicText(JSON.stringify({userLabel:'Real Owner Name',nested:{configId:'private config',session_id:'private session'}})));
+  expect(structured.userLabel).toBe('[ПОЛЬЗОВАТЕЛЬ]');
+  expect(structured.nested.configId).toBe('[КОНФИГУРАЦИЯ]');
+  expect(structured.nested.session_id).toBe('[ИДЕНТИФИКАТОР]');
+});
+
 test('credential-reading tool operations are summarized in public output', () => {
   const item=sanitizePublicItem({kind:'tool_call',name:'exec_command',text:'Get-Content /opt/codex-proxy/secrets/client.env'});
   expect(item.text).toBe(privacyMarkers.PRIVATE_OPERATION);
