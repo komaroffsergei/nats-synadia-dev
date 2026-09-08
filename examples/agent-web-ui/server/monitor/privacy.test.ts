@@ -73,7 +73,7 @@ test('public projection redacts sensitive JSON object keys without dropping entr
   });
   const safe=redactPublicText(source);
   for(const value of ['FirstOwner','SecondOwner','bearer-key-value']) expect(safe).not.toContain(value);
-  expect(Object.values(JSON.parse(safe))).toEqual(['first','second','third']);
+  expect(Object.values(JSON.parse(safe))).toEqual(['first','second',privacyMarkers.REDACTED]);
 });
 
 test('credential-reading tool operations are summarized in public output', () => {
