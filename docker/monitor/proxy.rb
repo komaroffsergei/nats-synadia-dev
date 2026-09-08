@@ -680,6 +680,7 @@ module RubyMITM
         upstream_url = bridge_plan ? bridge_plan.fetch(:upstream_url) : client_url
         log "  bridge upstream #{upstream_url}" if bridge_plan
         config_id = bridge_plan ? bridge_plan.fetch(:config_id) : active_config_id
+        monitor&.source_config(config_id)
         status, reason, response_headers, response_body = forward_request(
           method,
           upstream_url,
@@ -850,6 +851,7 @@ module RubyMITM
 
         upstream_url = bridge_plan ? bridge_plan.fetch(:upstream_url) : url
         config_id = bridge_plan ? bridge_plan.fetch(:config_id) : active_config_id
+        monitor&.source_config(config_id)
         status, reason, response_headers, response_body = forward_request(
           method,
           upstream_url,
@@ -922,8 +924,9 @@ module RubyMITM
         old_upstream = state[:upstream]
         state[:upstream] = new_upstream
         state[:retries] += 1
-        state[:monitor]&.retry
         request[:active_config_id] = bridge_plan ? bridge_plan.fetch(:config_id) : active_config_id
+        state[:monitor]&.source_config(request[:active_config_id])
+        state[:monitor]&.retry
         new_upstream = nil
       end
       old_upstream&.close rescue nil
@@ -1465,6 +1468,7 @@ module RubyMITM
 
       upstream_url = bridge_plan ? bridge_plan.fetch(:upstream_url) : client_url
       config_id = bridge_plan ? bridge_plan.fetch(:config_id) : active_config_id
+      monitor&.source_config(config_id)
       trace_enabled = trace_enabled_for_user?(request[:proxy_username])
       session_id = trace_session_id(request) if trace_enabled
 

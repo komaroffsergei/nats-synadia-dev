@@ -23,6 +23,18 @@ class ObserverTest < Minitest::Test
     assert_equal 1,@sink.events.count{|e|e[:type]=='usage.snapshot'}
     assert_equal 'completed',@sink.events.select{|e|e[:type]=='request.updated'}.last[:data][:status]
   end
+  def test_source_identifies_user_and_actual_config_without_configuration_contents
+    sink=MemorySink.new
+    c=CodexMonitor::Capture.new(sink,'owner-demo',{'session-id'=>'source-session'},'sse',nil,'POST','config-a')
+    c.client({'input'=>'Check status'})
+    c.source_config('config-b')
+    c.retry
+    assert_equal 'owner-demo',sink.events.find{|e|e[:type]=='source.status'}[:data][:userLabel]
+    assert_equal 'config-b',sink.events.select{|e|e[:type]=='request.started'}.last[:data][:configId]
+    c.source_config('sk-abcdefghijklmnop')
+    assert_equal CodexMonitor::REDACTED,sink.events.select{|e|e[:type]=='source.status'}.last[:data][:configId]
+    c.close
+  end
   def test_split_secret_never_published
     c=capture
     secret='sk-proj-'+('Ab7Z9cdE'*40)

@@ -36,7 +36,10 @@ function notify() {
         }
         if(!broadcastCache.has(row.id))broadcastCache.set(row.id,broadcasts.snapshot(row));
         const snapshot=broadcastCache.get(row.id);
-        if(d.cursor!==snapshot.cursor)ws.send(JSON.stringify({kind:'broadcast',data:snapshot}));
+        if(d.cursor!==snapshot.cursor) {
+          if(snapshot.mode==='replay') ws.send(JSON.stringify({kind:'broadcast_changed',data:{...broadcasts.metadata(row),mode:'replay',revision:snapshot.cursor}}));
+          else ws.send(JSON.stringify({kind:'broadcast',data:snapshot}));
+        }
         d.cursor=snapshot.cursor;continue;
       }
       if (d.share) {
@@ -202,6 +205,7 @@ async function project() {
 }
 if (process.env.MONITOR_TEST!=='true') void project();
 setInterval(()=>{
+  broadcasts.captureIdle();
   notify();
   for(const ws of peers)ws.ping();
 },2000).unref();

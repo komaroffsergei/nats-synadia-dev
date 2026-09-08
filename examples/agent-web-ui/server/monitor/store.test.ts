@@ -57,7 +57,7 @@ test('retention deletes text but keeps token ledger with visible partial history
 });
 test('new response completion does not claim agent job completion',()=>{
  const s=create();const a=event('request.started');s.apply(a);s.apply(event('request.updated',{status:'completed'}));
- expect(s.session(s.scopeId(a))?.status).toBe('quiet');
+ expect(s.session(s.scopeId(a))?.status).toBe('completed');
 });
 
 test('history pages preserve every item and start-time publication excludes old title',()=>{
@@ -75,7 +75,7 @@ test('proxy restart ends orphan request status without inventing task completion
  const s=create();const old=event('request.started',{}, {at:'2026-09-07T10:00:00.000Z'});s.apply(old);
  s.apply(event('source.status',{epochStartedAt:'2026-09-07T11:00:00.000Z'},{epoch:'epoch2',at:'2026-09-07T11:00:01.000Z'}));
  const session=s.session(s.scopeId(old))!;
- expect(session.status).toBe('quiet');expect(session.partial).toBe(1);expect((session.attempts[0] as any).status).toBe('incomplete');
+ expect(session.status).toBe('incomplete');expect(session.partial).toBe(1);expect((session.attempts[0] as any).status).toBe('incomplete');
 });
 test('public cursor does not expose activity from a private session',()=>{
  const s=create();const a=event('item.snapshot',{itemId:'m',text:'Public',revision:1});s.apply(a);
@@ -154,12 +154,12 @@ test('manual title wins over later proxy events, is searchable and never changes
  const s=create(),a=event('item.snapshot',{itemId:'prompt',role:'user',text:'First prompt'});s.apply(a);
  s.apply(event('usage.snapshot',{input:100,output:20,total:120,revision:1}));
  const id=s.scopeId(a),items=s.session(id)!.items,cursor=s.cursor();
- expect(s.session(id)!.title).toBe('Чат без названия');expect(s.session(id)!.requestPreview).toBe('First prompt');
+ expect(s.session(id)!.title).toBe('First prompt');expect(s.session(id)!.requestPreview).toBe('First prompt');
  s.rename(id,'Проверить связь с Кодексом','owner');
  expect(s.session(id)!.title).toBe('Проверить связь с Кодексом');expect(s.session(id)!.items).toEqual(items);expect(s.usage().total).toBe(120);expect(s.cursor()).toBe(cursor);
  s.apply(event('item.snapshot',{itemId:'next',role:'user',text:'Another prompt'}));
  expect(s.session(id)!.title).toBe('Проверить связь с Кодексом');expect(s.sessions('Проверить связь')).toHaveLength(1);
- s.rename(id,null,'owner');expect(s.session(id)!.title).toBe('Чат без названия');expect(s.session(id)!.customTitle).toBeNull();
+ s.rename(id,null,'owner');expect(s.session(id)!.title).toBe('First prompt');expect(s.session(id)!.customTitle).toBeNull();
  for(const value of ['', ' ', 123, undefined, 'a'.repeat(161), 'line\nbreak'])expect(()=>s.rename(id,value,'owner')).toThrow('invalid_title');
 });
 

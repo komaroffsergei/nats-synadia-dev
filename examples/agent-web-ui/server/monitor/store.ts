@@ -26,6 +26,8 @@ export class MonitorStore {
       CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS producers(key TEXT PRIMARY KEY,sequence INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS session_titles(session_id TEXT PRIMARY KEY,title TEXT NOT NULL,updated_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS source_users(tenant TEXT PRIMARY KEY,label TEXT NOT NULL,at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS session_sources(session_id TEXT PRIMARY KEY,config TEXT,at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS share_titles(share_id TEXT PRIMARY KEY,title TEXT NOT NULL);
     `);
     const columns = this.db.query('PRAGMA table_info(sessions)').all() as any[];
@@ -67,6 +69,10 @@ export class MonitorStore {
       if (event.type === 'delivery.gap') this.db.query('UPDATE sessions SET partial=1 WHERE id=?').run(sid);
       if (event.type === 'source.status') {
         this.setState('source', { ...d, at: event.at });
+        if (typeof d.userLabel === 'string' && d.userLabel.length <= 160)
+          this.db.query('INSERT INTO source_users VALUES(?,?,?) ON CONFLICT(tenant) DO UPDATE SET label=excluded.label,at=excluded.at WHERE excluded.at>=source_users.at').run(event.tenantId,d.userLabel,event.at);
+        if (d.configId === null || typeof d.configId === 'string' && d.configId.length <= 160)
+          this.db.query('INSERT INTO session_sources VALUES(?,?,?) ON CONFLICT(session_id) DO UPDATE SET config=excluded.config,at=excluded.at WHERE excluded.at>=session_sources.at').run(sid,d.configId,event.at);
         const last=this.state('sourceEpoch');
         if (d.epochStartedAt && (!last || d.epochStartedAt>last.at)) {
           // A newer proxy process cannot retain sockets from the previous process.
@@ -145,8 +151,20 @@ export class MonitorStore {
     return (this.db.query(`SELECT s.*,t.title custom_title FROM sessions s LEFT JOIN session_titles t ON t.session_id=s.id WHERE (COALESCE(t.title,s.title) LIKE ? OR s.title LIKE ? OR s.model LIKE ?) AND (?='' OR s.updated_at||s.id < ?) ORDER BY s.updated_at DESC,s.id DESC LIMIT ?`)
       .all(`%${search}%`,`%${search}%`,`%${search}%`,before,before,Math.min(limit,100)) as any[]).map(s => ({ ...this.presentSession(s), usage: this.usage(s.id,undefined,false), shared: this.shares(s.id).some(x => !x.revoked_at && x.expires_at > new Date().toISOString()) }));
   }
+  sessionStatus(id:string, at=Date.now()) {
+    const active=this.db.query("SELECT COUNT(*) n FROM attempts WHERE session_id=? AND status='streaming'").get(id) as any;
+    const last=this.db.query('SELECT status,updated_at FROM attempts WHERE session_id=? ORDER BY started_at DESC,rowid DESC LIMIT 1').get(id) as any;
+    const session=this.db.query('SELECT updated_at FROM sessions WHERE id=?').get(id) as any;
+    if(active.n) return at-Date.parse(session?.updated_at || '')>90_000 ? 'waiting' : 'streaming';
+    return ['completed','failed','incomplete','cancelled'].includes(last?.status) ? last.status : 'quiet';
+  }
   presentSession(s:any) {
-    return { ...s, requestPreview:s.title, title:s.custom_title || (s.activity==='title_generation'?'Создание названия чата':'Чат без названия'), customTitle:s.custom_title || null };
+    const user=this.db.query('SELECT label FROM source_users WHERE tenant=?').get(s.tenant) as any;
+    const source=this.db.query('SELECT config,at FROM session_sources WHERE session_id=?').get(s.id) as any;
+    return { ...s, status:this.sessionStatus(s.id), requestPreview:s.title,
+      title:s.custom_title || s.title || 'Чат без названия', customTitle:s.custom_title || null,
+      sourceUser:user?.label || null, sourceUserId:s.tenant,
+      sourceConfig:source?.config || null, sourceObservedAt:source?.at || null };
   }
   rename(id:string,title:unknown,actor:string) {
     if (title!==null && (typeof title!=='string' || !title.trim() || Array.from(title.trim()).length>160 || /[\u0000-\u001f\u007f]/.test(title))) throw Error('invalid_title');

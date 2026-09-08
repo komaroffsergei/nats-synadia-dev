@@ -2,11 +2,12 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import MonitorTimelineItem from './MonitorTimelineItem.vue';
 import { localDateTime as local, recordingInputs, rangeProblem, type RecordingRange } from '../broadcast-range';
-const props = defineProps<{ sessions: any[]; selectedId?: string }>();
+const props = defineProps<{ sessions: any[]; selectedId?: string; repeatIdle?: boolean }>();
 const rows = ref<any[]>([]),
   sessionId = ref(props.selectedId || ''),
   title = ref(''),
   mode = ref('live');
+const repeatWhenIdle=ref(!!props.repeatIdle);
 const from = ref(local(Date.now() - 3600000)),
   to = ref(local(Date.now() - 1000));
 const available = ref<RecordingRange | null>(null), rangeLoading = ref(false), rangeError = ref('');
@@ -90,7 +91,7 @@ async function refresh() {
 }
 watch(sessionId, (id) => {
   const s = props.sessions.find((s) => s.id === id);
-  title.value = s?.customTitle || '';
+  title.value = (s?.customTitle || s?.title || '').slice(0,160);
   if (s)
     from.value = local(
       Math.max(Date.parse(s.first_at), Date.now() - 24 * 3600000),
@@ -99,7 +100,7 @@ watch(sessionId, (id) => {
   error.value = ''; canFit.value = false;
   if (id) void loadRange(id);
 });
-watch([title, mode, from, to, loop, speed, skipPauses, position], () => {
+watch([title, mode, from, to, loop, speed, skipPauses, position, repeatWhenIdle], () => {
   draft.value = null; error.value = ''; notice.value = ''; canFit.value = false;
 });
 watch(mode, (value) => { if (value === 'replay' && available.value) useRange(5); });
@@ -125,6 +126,7 @@ async function preview(fit = false) {
         mode: mode.value,
         from: new Date(from.value).toISOString(),
         ...(mode.value === 'replay' ? { to: new Date(to.value).toISOString(), fit } : {}),
+        repeatWhenIdle:repeatWhenIdle.value,
         loop: loop.value,
         speed: Number(speed.value),
         skipPauses: skipPauses.value,
@@ -191,7 +193,7 @@ async function remove(row: any) {
 onMounted(() => {
   const s = props.sessions.find((s) => s.id === sessionId.value);
   if (s) {
-    title.value = s.customTitle || '';
+    title.value = (s.customTitle || s.title || '').slice(0,160);
     from.value = local(
       Math.max(Date.parse(s.first_at), Date.now() - 24 * 3600000),
     );
@@ -246,6 +248,8 @@ onMounted(() => {
             <option value="replay">Запись с повтором</option>
           </select></label
         >
+        <label v-if="mode==='live'" class="check"><input v-model="repeatWhenIdle" type="checkbox" :disabled="busy" /> Повторять после завершения запроса</label>
+        <p v-if="mode==='live' && repeatWhenIdle" class="help">Через 15 секунд без активных запросов эфир повторяет сохранённый лог с начала. Новые события сразу возвращают прямой эфир. Это воспроизведение записи, а не запуск Codex. Запись ограничена 8 MiB / 6000 изменений; при превышении повторы приостанавливаются, прямой эфир продолжается.</p>
         <div class="fields">
           <label
             >Начало фрагмента<input
@@ -346,6 +350,8 @@ onMounted(() => {
             }}
             · порядок {{ row.position }}
           </p>
+          <p v-if="row.replayProblem" class="notice error">Автоповтор недоступен: {{messages[row.replayProblem] || row.replayProblem}}. Прямой эфир продолжается.</p>
+          <label v-if="row.mode==='live'" class="check"><input type="checkbox" :checked="row.repeatWhenIdle" :disabled="busy" @change="update(row,{repeatWhenIdle:($event.target as HTMLInputElement).checked})" /> Автоповтор после запроса</label>
           <div class="row-actions">
             <button
               :disabled="busy"

@@ -116,17 +116,17 @@ module CodexMonitor
     allowed = ENV.fetch('MONITOR_USERS', '').split(',').map(&:strip)
     return nil if user.empty? || (!allowed.include?('*') && !allowed.include?(user))
     if transport == 'websocket'
-      WebSocketCapture.new(sink, user, request[:headers] || {})
+      WebSocketCapture.new(sink, user, request[:headers] || {}, request[:active_config_id])
     else
-      Capture.new(sink, user, request[:headers] || {}, transport, request[:body], request[:method])
+      Capture.new(sink, user, request[:headers] || {}, transport, request[:body], request[:method], request[:active_config_id])
     end
   rescue StandardError
     nil
   end
 
   class WebSocketCapture
-    def initialize(sink, user, headers)
-      @sink, @user, @headers = sink, user, headers
+    def initialize(sink, user, headers, config = nil)
+      @sink, @user, @headers, @config = sink, user, headers, config
       @pending, @responses, @items, @all = [], {}, {}, []
     end
 
@@ -134,7 +134,7 @@ module CodexMonitor
       value = JSON.parse(payload.to_s)
       return unless value['type'] == 'response.create' || value.key?('input')
       return if @pending.length >= 32
-      capture = Capture.new(@sink, @user, @headers, 'websocket', payload)
+      capture = Capture.new(@sink, @user, @headers, 'websocket', payload, 'POST', @config)
       @pending << capture
       @all << capture
       prune
@@ -157,7 +157,7 @@ module CodexMonitor
       capture ||= @responses.values.reject(&:terminal?).uniq.then { |active| active.length == 1 ? active.first : nil }
       capture ||= @pending.first if @pending.length == 1
       unless capture
-        capture = Capture.new(@sink, @user, @headers, 'websocket')
+        capture = Capture.new(@sink, @user, @headers, 'websocket', nil, 'POST', @config)
         @all << capture
       end
       @responses[response_id] = capture if response_id
@@ -167,6 +167,13 @@ module CodexMonitor
       capture.server(value)
       @last = capture
       prune
+    rescue StandardError
+      nil
+    end
+
+    def source_config(config)
+      @config = config
+      @last&.source_config(config)
     rescue StandardError
       nil
     end
@@ -205,7 +212,7 @@ module CodexMonitor
 
   class Capture
     def terminal?; @terminal; end
-    def initialize(sink, user, headers, transport, body = nil, method = 'POST')
+    def initialize(sink, user, headers, transport, body = nil, method = 'POST', config = nil)
       @sink, @transport, @method = sink, transport, method
       metadata = JSON.parse(headers['x-codex-turn-metadata'].to_s) rescue {}
       sid = headers['session-id'] || headers['session_id'] || metadata['session_id']
@@ -219,12 +226,20 @@ module CodexMonitor
       @closed, @terminal = false, false
       @current = nil
       @response_requests = {}
-      @sink.emit(@scope, 'source.status', { state: 'connected', transport: transport })
+      @user_label = CodexMonitor.clean(user)[0, 160]
+      source_config(config)
       client(body) if body && !body.to_s.empty?
     end
 
     def emit(type, data)
       @sink.emit(@scope.merge(requestId: @current && @current[:request], attemptId: @current && @current[:attempt]), type, data)
+    end
+
+    def source_config(config)
+      @config = config.nil? ? nil : CodexMonitor.clean(config)[0, 160]
+      emit('source.status', { state: 'connected', transport: @transport, userLabel: @user_label, configId: @config })
+    rescue StandardError
+      nil
     end
 
     def start(value = {}, retrying: false)
@@ -235,7 +250,7 @@ module CodexMonitor
       @terminal = false
       @model = value['model'] || @model
       emit('request.started', { transport: @transport, method: @method, model: @model,
-        retry: retrying, status: 'streaming', responseId: nil })
+        configId: @config, retry: retrying, status: 'streaming', responseId: nil })
     end
 
     def client(payload)
