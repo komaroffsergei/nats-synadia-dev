@@ -53,7 +53,7 @@ export function redactPublicText(input: unknown, options: { kind?: string } = {}
   let text = redactStoredText(input);
   if ((options.kind === 'tool_call' || options.kind === 'tool_result') && privateToolOperation(text)) return PRIVATE_OPERATION;
   if (/vdsina\.(?:ru|com)/i.test(text)) text = text.replace(/https?:\/\/(?:cp\.)?vdsina\.(?:ru|com)\/[^\s"'<>)]*/gi, '[СЛУЖЕБНАЯ ССЫЛКА]');
-  if (/:\\?\/?Users[\\/]/i.test(text)) text = text.replace(/\b[A-Z]:[\\/]Users[\\/][^\s"'<>`,;)]+/gi, '[РАБОЧАЯ ПАПКА]');
+  if (/:\\*\/*Users[\\/]/i.test(text)) text = text.replace(/\b[A-Z]:[\\/]+Users[\\/]+[^\s"'<>`,;)]+/gi, '[РАБОЧАЯ ПАПКА]');
   if (/\/(?:home|root)\//.test(text)) text = text.replace(/\/(?:home|root)\/[^\s"'<>`,;)]+/g, '[РАБОЧАЯ ПАПКА]');
   if (/\/(?:opt\/codex-proxy|srv\/portfolio|var\/lib\/docker|etc\/nginx)/.test(text)) text = text.replace(/\/(?:opt\/codex-proxy|srv\/portfolio|var\/lib\/docker|etc\/nginx)(?:\/[^\s"'<>`,;)]*)?/g, '[СЕРВЕРНЫЙ ПУТЬ]');
   if (/(?:\.htpasswd|mitm-ca\.key|\.env(?:\.|\b)|(?:keys|auth)\.json|credentials?\.(?:json|ya?ml))/i.test(text)) text = text.replace(/\S*(?:\.htpasswd\S*|mitm-ca\.key|[\w.-]*\.env(?:\.[\w.-]+)?|(?:keys|auth)\.json|credentials?\.(?:json|ya?ml))\S*/gi, '[СЕКРЕТНЫЙ ФАЙЛ]');

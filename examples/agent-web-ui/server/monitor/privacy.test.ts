@@ -32,6 +32,13 @@ test('public projection anonymizes paths, service links and embedded identities'
   expect(safe).toContain('[СЛУЖЕБНАЯ ССЫЛКА]');
 });
 
+test('public projection handles paths embedded as escaped command text', () => {
+  const source=String.raw`{"cmd":"Get-Content C:\\Users\\RealOwner\\project\\settings.json"}`;
+  const safe=redactPublicText(source);
+  expect(safe).not.toContain('RealOwner');
+  expect(safe).toContain('[РАБОЧАЯ ПАПКА]');
+});
+
 test('credential-reading tool operations are summarized in public output', () => {
   const item=sanitizePublicItem({kind:'tool_call',name:'exec_command',text:'Get-Content /opt/codex-proxy/secrets/client.env'});
   expect(item.text).toBe(privacyMarkers.PRIVATE_OPERATION);
