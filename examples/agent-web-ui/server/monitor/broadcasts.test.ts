@@ -1,6 +1,6 @@
 import { test, expect, afterEach } from 'bun:test';
 import { MonitorStore } from './store.ts';
-import { BroadcastStore } from './broadcasts.ts';
+import { BroadcastStore, PUBLIC_LOG_LIMIT } from './broadcasts.ts';
 import type { MonitorEvent } from './contracts.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -237,4 +237,19 @@ test('full live preview includes all pages before publishing', () => {
   const preview = b.prepare(config(sid, 'live'), 'owner').preview;
   expect(preview.items).toHaveLength(101);
   expect(preview.hasOlder).toBe(false);
+});
+test('public replay is bounded to 100 frames while private preview and archive stay complete', () => {
+  const { monitor, b, sid } = fixture();
+  for (let n = 0; n < 125; n++) {
+    const e = evt('Replay item ' + n);
+    e.data.itemId = 'replay-' + n;
+    monitor.apply(e);
+  }
+  const draft = b.prepare(config(sid), 'owner');
+  expect(draft.preview.frames).toHaveLength(126);
+  const row = b.publish(draft.draftId, 'owner');
+  const publicReplay = b.public(row.id);
+  expect(publicReplay.frames).toHaveLength(PUBLIC_LOG_LIMIT);
+  expect(publicReplay.frames[0].offsetMs).toBe(0);
+  expect(JSON.parse(b.row(row.id).recording).frames).toHaveLength(126);
 });

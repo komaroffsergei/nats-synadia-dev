@@ -4,6 +4,7 @@ import { sanitizePublicItem, sanitizePublicTitle } from './privacy.ts';
 
 const RECORD_LIMIT = 8 * 1024 * 1024;
 const ARCHIVE_LIMIT = 128 * 1024 * 1024;
+export const PUBLIC_LOG_LIMIT = 100;
 const idPattern = /^[a-f0-9]{32}$/;
 const iso = (value: unknown) => {
   if (typeof value !== 'string' || !Number.isFinite(Date.parse(value)))
@@ -179,15 +180,28 @@ export class BroadcastStore {
         .all() as any[]
     ).map((row) => this.metadata(row, owner));
   }
-  snapshot(row: any, before = 0) {
+  snapshot(row: any, before = 0, publicLimit = 0) {
     row=this.refreshReplay(row);
     if (row.mode === 'replay' || this.metadata(row).autoReplay) {
       const recording=JSON.parse(row.recording);
+      let frames=Array.isArray(recording.frames) ? recording.frames.map((frame:any)=>({...frame,item:this.item(row.id,frame.item)})) : [];
+      let items=Array.isArray(recording.items) ? recording.items.map((item:any)=>this.item(row.id,item)) : [];
+      let durationMs=recording.durationMs || 0;
+      if(publicLimit>0) {
+        items=items.slice(-publicLimit);
+        if(frames.length>publicLimit) {
+          frames=frames.slice(-publicLimit);
+          const firstOffset=frames[0]?.offsetMs || 0;
+          frames=frames.map((frame:any)=>({...frame,offsetMs:Math.max(0,frame.offsetMs-firstOffset)}));
+          durationMs=Math.max(1000,frames.at(-1)?.offsetMs || 0);
+        }
+      }
       return {
         ...this.metadata(row),
         ...recording,
-        frames:Array.isArray(recording.frames) ? recording.frames.map((frame:any)=>({...frame,item:this.item(row.id,frame.item)})) : [],
-        items:Array.isArray(recording.items) ? recording.items.map((item:any)=>this.item(row.id,item)) : [],
+        durationMs,
+        frames,
+        items,
         cursor: this.monitor.hash(`${row.updated_at}/${JSON.parse(row.summary || '{}').replayCursor || ''}/replay`),
       };
     }
@@ -195,6 +209,7 @@ export class BroadcastStore {
       { session_id: row.session_id, start_at: row.start_at, expires_at: null },
       before,
     );
+    const items=snapshot?.items?.map((item: any) => this.item(row.id, item)) || [];
     return {
       ...this.metadata(row),
       items: snapshot?.items || [],
@@ -205,14 +220,12 @@ export class BroadcastStore {
       cursor: this.monitor.hash(`${row.updated_at}/${snapshot?.cursor || ''}/live/${this.metadata(row).replayProblem || ''}`),
       source: 'Codex proxy',
       // Re-scope even public item IDs to this publication; source identifiers stay private.
-      ...(snapshot
-        ? { items: snapshot.items.map((item: any) => this.item(row.id, item)) }
-        : {}),
+      ...(snapshot ? { items: publicLimit>0 ? items.slice(-publicLimit) : items } : {}),
     };
   }
   public(id: string, before = 0) {
     const row = this.row(id);
-    return row?.visible ? this.snapshot(row, before) : null;
+    return row?.visible ? this.snapshot(row, before, PUBLIC_LOG_LIMIT) : null;
   }
   range(sessionId: string) {
     if (!idPattern.test(sessionId) || !this.monitor.db.query('SELECT id FROM sessions WHERE id=?').get(sessionId))

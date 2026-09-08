@@ -34,7 +34,7 @@ function notify() {
           if(d.cursor!==row.updated_at)ws.send(JSON.stringify({kind:'broadcast_changed',data:broadcasts.metadata(row)}));
           d.cursor=row.updated_at;continue;
         }
-        if(!broadcastCache.has(row.id))broadcastCache.set(row.id,broadcasts.snapshot(row));
+        if(!broadcastCache.has(row.id))broadcastCache.set(row.id,broadcasts.public(row.id));
         const snapshot=broadcastCache.get(row.id);
         if(d.cursor!==snapshot.cursor) {
           if(snapshot.mode==='replay') ws.send(JSON.stringify({kind:'broadcast_changed',data:{...broadcasts.metadata(row),mode:'replay',revision:snapshot.cursor}}));
