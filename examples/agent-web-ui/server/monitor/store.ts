@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { validateEvent, usageQuality, type MonitorEvent } from './contracts.ts';
 import { nextDisplay, type SessionDisplay } from '../../shared/monitor-display.ts';
+import { sanitizeEventForStorage, sanitizePublicItem, sanitizePublicTitle } from './privacy.ts';
 
 export class MonitorStore {
   db: Database;
@@ -48,7 +49,8 @@ export class MonitorStore {
       this.db.query('UPDATE sessions SET title=?,activity=? WHERE id=?').run(next.title, next.activity, id);
   }
 
-  apply(event: MonitorEvent) {
+  apply(incoming: MonitorEvent) {
+    const event=sanitizeEventForStorage(incoming);
     validateEvent(event);
     return this.db.transaction(() => {
       const exists = this.db.query('SELECT seq FROM events WHERE event_id=?').get(event.eventId);
@@ -214,7 +216,7 @@ export class MonitorStore {
     // Public discovery uses safe share IDs, never raw tokens or private session IDs.
     return rows.map(s => {
       const share = this.db.query('SELECT id,start_at FROM shares WHERE session_id=? AND revoked_at IS NULL AND expires_at>? ORDER BY created_at DESC LIMIT 1').get(s.id,new Date().toISOString()) as any;
-      return { id:share.id,title:this.shareTitle(share.id),model:s.model,updatedAt:s.updated_at };
+      return { id:share.id,title:sanitizePublicTitle(this.shareTitle(share.id)),model:s.model,updatedAt:s.updated_at };
     });
   }
   publicShareById(id:string) { return this.db.query('SELECT * FROM shares WHERE id=? AND revoked_at IS NULL AND expires_at>?').get(id,new Date().toISOString()) as any; }
@@ -227,8 +229,8 @@ export class MonitorStore {
     const s = this.session(share.session_id,share.start_at,Number.MAX_SAFE_INTEGER,before);
     if (!s) return null;
     const { model,status,updated_at,items,usage,partial,hasOlder } = s;
-    return { title:share.id?this.shareTitle(share.id):this.customTitle(share.session_id)||'Чат без названия',model,status,updated_at,partial,cursor:this.publicCursor(share),oldest:before+items.length,hasOlder,expiresAt:share.expires_at,
-      items:items.map(({ itemId,kind,role,name,text,at,complete,truncated,segment,groupId }:any) => ({ itemId:this.hash(`${share.id}/${itemId}`).slice(0,32),kind,role,name,text,at,complete,truncated,segment,groupId })),
+    return { title:sanitizePublicTitle(share.id?this.shareTitle(share.id):this.customTitle(share.session_id)||'Чат без названия'),model,status,updated_at,partial,cursor:this.publicCursor(share),oldest:before+items.length,hasOlder,expiresAt:share.expires_at,
+      items:items.map(({ itemId,kind,role,name,text,at,complete,truncated,segment,groupId }:any) => sanitizePublicItem({ itemId:this.hash(`${share.id}/${itemId}`).slice(0,32),kind,role,name,text,at,complete,truncated,segment,groupId:groupId?this.hash(`${share.id}/${groupId}`).slice(0,32):undefined })),
       usage:{ input:usage.input,output:usage.output,total:usage.total,cached:usage.cached,reasoning:usage.reasoning,quality:usage.quality,buckets:usage.buckets } };
   }
   prune(now=Date.now()) {

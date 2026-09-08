@@ -11,18 +11,67 @@ require 'zlib'
 module CodexMonitor
   REDACTED = '[скрыто]'
   MAX_ITEM = 2 * 1024 * 1024
+  SECRET_KEY = /(?:\A|[_-])(?:authorization|password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|cookie|credential|client[_-]?secret|private[_-]?key)(?:\z|[_-])/i
+  SECRET_SUFFIX = /(?:enabled|present|required|path|file|name|count|ttl|type)\z/i
+  @known_secrets = []
+  @known_secret_pattern = nil
+  @secret_mutex = Mutex.new
+
+  def self.register_secret(value)
+    secret = value.to_s.dup
+    return if secret.bytesize < 6 || secret.bytesize > 65_536
+    @secret_mutex.synchronize do
+      @known_secrets << secret unless @known_secrets.include?(secret)
+      @known_secrets.shift while @known_secrets.length > 256
+      @known_secret_pattern = Regexp.union(@known_secrets.sort_by { |item| -item.bytesize })
+    end
+  rescue StandardError
+    nil
+  end
+
+  def self.secret_key?(key)
+    normalized = key.to_s.downcase.gsub(/[^a-z0-9]+/, '_')
+    !normalized.match?(SECRET_SUFFIX) && normalized.match?(SECRET_KEY)
+  end
+
+  def self.sanitize(value)
+    case value
+    when Hash
+      value.each_with_object({}) { |(key, item), result| result[key] = secret_key?(key) ? REDACTED : sanitize(item) }
+    when Array then value.map { |item| sanitize(item) }
+    when String then clean(value)
+    else value
+    end
+  end
 
   def self.clean(value)
     text = value.to_s.encode('UTF-8', invalid: :replace, undef: :replace)
-    text = text.gsub(/(?:sk-|gh[pousr]_|github_pat_|xox[baprs]-)[A-Za-z0-9_\-]{6,}/, REDACTED)
+    if text.lstrip.start_with?('{', '[')
+      begin
+        return JSON.generate(sanitize(JSON.parse(text)))
+      rescue JSON::ParserError
+        # Streamed JSON can be incomplete; lexical rules below still apply.
+      end
+    end
+    pattern = @secret_mutex.synchronize { @known_secret_pattern }
+    text = text.gsub(pattern, REDACTED) if pattern
+    text = text.gsub(/-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----/m, REDACTED)
+    text = text.gsub(/(?:sk-|gh[pousr]_|github_pat_|xox[baprs]-|glpat-|npm_|pypi-)[A-Za-z0-9_.\-]{6,}/, REDACTED)
+    text = text.gsub(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/, REDACTED)
+    text = text.gsub(/\b\d{6,12}:[A-Za-z0-9_\-]{30,}\b/, REDACTED)
     text = text.gsub(/\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+(?:\.[A-Za-z0-9_\-]*)?/, REDACTED)
     text = text.gsub(/\b(Bearer|Basic)\s+[A-Za-z0-9+\/_=.\-]+/i, '\1 ' + REDACTED)
     # Quoted passwords may contain spaces; redact incomplete quoted values too.
-    text = text.gsub(/((?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie)\s*["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*(?:"|\z)|'(?:\\.|[^'\\])*(?:'|\z))/i, '\1' + REDACTED)
-    text = text.gsub(/((?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|cookie)\s*["']?\s*[:=]\s*["']?)([^\s"'`,;}]+)/i, '\1' + REDACTED)
-    text = text.gsub(%r{(https?://)[^\s/:@]+:[^\s/@]+@}, '\1' + REDACTED + '@')
+    field = '(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|password|passwd|secret|cookie|credential|client[_-]?secret|private[_-]?key)'
+    text = text.gsub(/((?:^|[\s,{;])(?:[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|AUTHORIZATION|COOKIE|CREDENTIAL|PRIVATE_KEY))\s*=\s*)(?:"(?:\\.|[^"\\])*(?:"|\z)|'(?:\\.|[^'\\])*(?:'|\z)|[^\s,;}]+)/im, '\1' + REDACTED)
+    text = text.gsub(/((?:#{field})\s*["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*(?:"|\z)|'(?:\\.|[^'\\])*(?:'|\z))/i, '\1' + REDACTED)
+    text = text.gsub(/((?:#{field})\s*["']?\s*[:=]\s*["']?)([^\s"'`,;}]+)/i, '\1' + REDACTED)
+    text = text.gsub(/((?:--?(?:password|passwd|secret|token|api-key|api_key|authorization)|-u)\s*(?:=|\s)\s*)(?:"(?:\\.|[^"\\])*(?:"|\z)|'(?:\\.|[^'\\])*(?:'|\z)|[^\s]+)/i, '\1' + REDACTED)
+    text = text.gsub(%r{([a-z][a-z0-9+.-]*://)[^\s/:@]+:[^\s/@]+@}i, '\1' + REDACTED + '@')
+    text = text.gsub(/([?&](?:access_token|refresh_token|api_?key|token|password|secret|signature|sig|auth)=)[^\s&#"'<>]+/i, '\1' + REDACTED)
     # High-entropy credential-like tokens; ordinary prose and short source IDs survive.
-    text.gsub(/\b(?=[A-Za-z0-9_\-]{32,}\b)(?=[A-Za-z0-9_\-]*[a-z])(?=[A-Za-z0-9_\-]*[A-Z])(?=[A-Za-z0-9_\-]*\d)[A-Za-z0-9_\-]+\b/, REDACTED)
+    return text unless text.match?(/[A-Z]/) && text.match?(/\d/)
+    text.gsub(/\b[A-Za-z0-9_\-]{32,}\b/) { |token| token.match?(/[a-z]/) && token.match?(/[A-Z]/) && token.match?(/\d/) ? REDACTED : token }
   end
 
   class Sink
@@ -41,7 +90,7 @@ module CodexMonitor
       event = @mutex.synchronize do
         @seq += 1
         { version: 1, eventId: "#{@epoch}:#{@seq}", producer: 'codex-proxy', epoch: @epoch,
-          sequence: @seq, at: Time.now.utc.iso8601(6), type: type, **scope, data: data }
+          sequence: @seq, at: Time.now.utc.iso8601(6), type: type, **scope, data: CodexMonitor.sanitize(data) }
       end
       @queue.push(event, true)
       true
@@ -346,7 +395,9 @@ module CodexMonitor
           text << value['delta'].byteslice(0, [remaining, 0].max).to_s.force_encoding('UTF-8').scrub
           @item_meta[key] ||= { kind: kind, role: 'assistant', originalId: id, partIndex: part }
           @item_meta[key][:truncated] = true if value['delta'].bytesize > remaining
-          flush(key, false) if Time.now.to_f - (@last_flush[key] || 0) >= 0.05
+          # Tool arguments are JSON/config-like and stay private until the complete
+          # value can be parsed and sanitized without exposing an early fragment.
+          flush(key, false) if kind != 'tool_call' && Time.now.to_f - (@last_flush[key] || 0) >= 0.05
         end
       elsif type == 'response.output_item.added'
         item = value['item'] || {}

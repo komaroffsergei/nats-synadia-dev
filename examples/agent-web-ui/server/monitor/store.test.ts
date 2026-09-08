@@ -150,6 +150,13 @@ test('public items have distinct share-scoped identities even at the same timest
  expect(JSON.stringify(items)).not.toContain('original-');
 });
 
+test('public item and group identifiers are both scoped to the share',()=>{
+ const s=create(),a=event('item.snapshot',{itemId:'private-item',groupId:'private-group',role:'assistant',text:'Visible',revision:1});s.apply(a);
+ const sh=s.createShare(s.scopeId(a),'1970-01-01T00:00:00.000Z',1,'owner'),item=s.publicSnapshot(s.share(sh.token))!.items[0];
+ expect(item.itemId).not.toContain('private-item');expect(item.groupId).not.toContain('private-group');
+ expect(item.itemId).toHaveLength(32);expect(item.groupId).toHaveLength(32);
+});
+
 test('manual title wins over later proxy events, is searchable and never changes text or usage',()=>{
  const s=create(),a=event('item.snapshot',{itemId:'prompt',role:'user',text:'First prompt'});s.apply(a);
  s.apply(event('usage.snapshot',{input:100,output:20,total:120,revision:1}));
@@ -180,4 +187,15 @@ test('publication captures the chosen name and a later private rename does not l
  expect(s.publicSnapshot(share)!.title).toBe('Название для публикации');expect(s.publicSessions()[0].title).toBe('Название для публикации');expect(s.publicCursor(share)).toBe(cursor);
  expect(s.publicSnapshot({session_id:id,start_at:'1970-01-01T00:00:00.000Z'})!.title).toBe('Новое частное название');
  expect(JSON.stringify(s.publicSnapshot(share))).not.toContain('Новое частное название');
+});
+
+test('public history redacts old stored text and title at read time',()=>{
+ const s=create(),raw='C:\\Users\\RealUser\\private password=visible-before-fix';
+ const a=event('item.snapshot',{itemId:'legacy',role:'assistant',kind:'tool_result',text:raw});s.apply(a);
+ const id=s.scopeId(a),sh=s.createShare(id,'1970-01-01T00:00:00.000Z',1,'owner'),share=s.share(sh.token);
+ // Simulate a historical row created before ingress redaction was deployed.
+ const row=s.db.query('SELECT body FROM items WHERE session_id=? AND id=?').get(id,'legacy') as any;
+ s.db.query('UPDATE items SET body=? WHERE session_id=? AND id=?').run(JSON.stringify({...JSON.parse(row.body),text:raw}),id,'legacy');
+ const publicText=JSON.stringify(s.publicSnapshot(share));
+ expect(publicText).not.toContain('RealUser');expect(publicText).not.toContain('visible-before-fix');
 });

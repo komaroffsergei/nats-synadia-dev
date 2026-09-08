@@ -10,6 +10,6 @@ Synadia Agents SDK и discovery/prompt bridge удалены. Старый пр�
 
 Проверки: `node --test src/nats-options.test.js`, `bun test examples/agent-web-ui/server/monitor`, `bunx vue-tsc --noEmit` в каталоге UI.
 
-Контракты мониторинга: [PROXY-MONITOR](docs/PROXY-MONITOR.md), [эфиры](docs/site-broadcasts.md), [статусы](docs/session-controls.md). Старые эксплуатационные инструкции для исходного Swarm-примера сохранены как исторические материалы; действующий выпуск использует Docker Compose на VPS.
+Контракты мониторинга: [PROXY-MONITOR](docs/PROXY-MONITOR.md), [защита публичных данных](docs/privacy.md), [эфиры](docs/site-broadcasts.md), [статусы](docs/session-controls.md). Старые эксплуатационные инструкции для исходного Swarm-примера сохранены как исторические материалы; действующий выпуск использует Docker Compose на VPS.
 
 Производные стили UI сохраняют Apache-2.0 attribution в `examples/agent-web-ui/LICENSE` и `NOTICE`.

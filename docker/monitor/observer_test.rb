@@ -127,4 +127,43 @@ class ObserverTest < Minitest::Test
     partial=CodexMonitor.clean('password: "unfinished multi word secret')
     refute_includes partial,'multi word'
   end
+  def test_structured_json_and_non_http_credentials_are_redacted_without_breaking_json
+    raw=JSON.generate({enabled:true,db:'postgresql://admin:db-pass@example.test/app',nested:{access_token:'token-value-12345'},input_tokens:12})
+    clean=CodexMonitor.clean(raw)
+    value=JSON.parse(clean)
+    assert_equal true,value['enabled']
+    assert_equal 12,value['input_tokens']
+    assert_equal CodexMonitor::REDACTED,value.dig('nested','access_token')
+    refute_includes clean,'db-pass'
+    assert_includes clean,'postgresql://[скрыто]@example.test/app'
+  end
+  def test_known_secrets_cli_flags_pem_and_query_values_are_redacted
+    known='plain-secret-without-prefix'
+    CodexMonitor.register_secret(known)
+    text=CodexMonitor.clean("curl -u demo:pass --token abcdef123456 https://example.test/?signature=signed-value #{known}\n-----BEGIN PRIVATE KEY-----\nPRIVATE\n-----END PRIVATE KEY-----")
+    %w[demo:pass abcdef123456 signed-value plain-secret-without-prefix PRIVATE].each{|value|refute_includes text,value}
+  end
+  def test_every_split_of_a_synthetic_secret_stays_out_of_incremental_snapshots
+    secret='sk-proj-'+('Qr7Xy9'*36)
+    source='Начало '+('обычный текст '*30)+' password="'+secret+'" конец'
+    (1...source.length).step(7).each do |cut|
+      @sink=MemorySink.new
+      c=CodexMonitor::Capture.new(@sink,'test',{'session-id'=>'split'},'sse',JSON.generate({model:'test',input:'run'}))
+      [source[0...cut],source[cut..]].each{|part|c.server({type:'response.output_text.delta',item_id:'split-item',delta:part})}
+      c.close
+      output=JSON.generate(@sink.events)
+      refute_includes output,secret
+      refute_includes output,secret[0,48]
+    end
+  end
+  def test_tool_call_is_not_emitted_until_complete_structured_value_arrives
+    c=capture
+    c.server({type:'response.function_call_arguments.delta',item_id:'tool',delta:'{"password":"early'})
+    refute @sink.events.any?{|event|event[:type]=='item.snapshot'&&event[:data][:kind]=='tool_call'}
+    c.server({type:'response.output_item.done',item:{id:'tool',type:'function_call',name:'exec',arguments:'{"password":"early-value","cmd":"status"}'}})
+    c.close
+    item=@sink.events.find{|event|event[:type]=='item.snapshot'&&event[:data][:kind]=='tool_call'}
+    refute_nil item
+    assert_equal CodexMonitor::REDACTED,JSON.parse(item[:data][:text])['password']
+  end
 end

@@ -4,6 +4,7 @@ import { connect } from '@nats-io/transport-node';
 import { jetstream } from '@nats-io/jetstream';
 import { validateEvent } from './contracts.ts';
 import { traceConnection } from './nats.ts';
+import { sanitizeEventForStorage } from './privacy.ts';
 
 const outbox = process.env.MONITOR_OUTBOX || '/outbox';
 const healthPath = process.env.MONITOR_INGEST_HEALTH || '/status/ingest.json';
@@ -21,8 +22,9 @@ while (!stopping) {
   for (const file of files.slice(0,200)) {
     try {
       const bytes=await readFile(join(outbox,file));
-      const event=JSON.parse(bytes.toString());validateEvent(event);
-      await js.publish(`codex.trace.${event.tenantId}.${event.sessionId}`,bytes,{msgID:event.eventId,timeout:1500});
+      const event=sanitizeEventForStorage(JSON.parse(bytes.toString()));validateEvent(event);
+      const safeBytes=Buffer.from(JSON.stringify(event));
+      await js.publish(`codex.trace.${event.tenantId}.${event.sessionId}`,safeBytes,{msgID:event.eventId,timeout:1500});
       await unlink(join(outbox,file));sent++;lastEventAt=event.at;
     } catch { errors++;break; }
   }

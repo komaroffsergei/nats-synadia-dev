@@ -119,6 +119,16 @@ test('recordings include revisions once and no metadata from another session', (
     expect(text).not.toContain(value);
   expect(b.public(row.id).frames).toHaveLength(2);
 });
+test('legacy replay recordings are sanitized every time they are served', () => {
+  const { monitor,b,sid }=fixture();
+  const row=b.publish(b.prepare(config(sid),'owner').draftId,'owner');
+  const saved=b.row(row.id)!;
+  const recording=JSON.parse(saved.recording);
+  recording.frames[0].item.text='C:\\Users\\PrivateUser\\repo password=legacy-cleartext';
+  monitor.db.query('UPDATE broadcasts SET recording=? WHERE id=?').run(JSON.stringify(recording),row.id);
+  const output=JSON.stringify(b.public(row.id));
+  expect(output).not.toContain('PrivateUser');expect(output).not.toContain('legacy-cleartext');
+});
 test('hiding removes discovery and direct access, retaining a private recording', () => {
   const { b, sid } = fixture();
   const row = b.publish(b.prepare(config(sid), 'owner').draftId, 'owner');

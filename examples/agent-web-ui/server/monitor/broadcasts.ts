@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { MonitorStore } from './store.ts';
+import { sanitizePublicItem, sanitizePublicTitle } from './privacy.ts';
 
 const RECORD_LIMIT = 8 * 1024 * 1024;
 const ARCHIVE_LIMIT = 128 * 1024 * 1024;
@@ -49,7 +50,7 @@ export class BroadcastStore {
   item(scope: string, item: any) {
     const hash = (value: string) =>
       this.monitor.hash(`${scope}/${value}`).slice(0, 32);
-    return {
+    return sanitizePublicItem({
       itemId: hash(item.itemId),
       kind: item.kind || 'message',
       role: item.role,
@@ -60,7 +61,7 @@ export class BroadcastStore {
       truncated: !!item.truncated,
       groupId: item.groupId ? hash(item.groupId) : undefined,
       segment: item.segment,
-    };
+    });
   }
   private replayCache = new Map<string, {key:string;row:any}>();
   captureIdle() {
@@ -142,7 +143,7 @@ export class BroadcastStore {
         : null;
     return {
       id: row.id,
-      title: row.title,
+      title: owner ? row.title : sanitizePublicTitle(row.title),
       mode: !owner && replaying ? 'replay' : row.mode,
       configuredMode:row.mode,
       autoReplay:replaying,
@@ -180,12 +181,16 @@ export class BroadcastStore {
   }
   snapshot(row: any, before = 0) {
     row=this.refreshReplay(row);
-    if (row.mode === 'replay' || this.metadata(row).autoReplay)
+    if (row.mode === 'replay' || this.metadata(row).autoReplay) {
+      const recording=JSON.parse(row.recording);
       return {
         ...this.metadata(row),
-        ...JSON.parse(row.recording),
+        ...recording,
+        frames:Array.isArray(recording.frames) ? recording.frames.map((frame:any)=>({...frame,item:this.item(row.id,frame.item)})) : [],
+        items:Array.isArray(recording.items) ? recording.items.map((item:any)=>this.item(row.id,item)) : [],
         cursor: this.monitor.hash(`${row.updated_at}/${JSON.parse(row.summary || '{}').replayCursor || ''}/replay`),
       };
+    }
     const snapshot = this.monitor.publicSnapshot(
       { session_id: row.session_id, start_at: row.start_at, expires_at: null },
       before,
@@ -227,13 +232,14 @@ export class BroadcastStore {
       throw Error('invalid_broadcast');
     const session = this.monitor.session(body.sessionId);
     if (!session) throw Error('not_found');
-    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    const requestedTitle = typeof body.title === 'string' ? body.title.trim() : '';
     if (
-      !title ||
-      Array.from(title).length > 160 ||
-      /[\u0000-\u001f\u007f]/.test(title)
+      !requestedTitle ||
+      Array.from(requestedTitle).length > 160 ||
+      /[\u0000-\u001f\u007f]/.test(requestedTitle)
     )
       throw Error('invalid_title');
+    const title = sanitizePublicTitle(requestedTitle);
     const now = new Date().toISOString(),
       from = iso(body.from),
       to = body.mode === 'replay' ? iso(body.to) : null;

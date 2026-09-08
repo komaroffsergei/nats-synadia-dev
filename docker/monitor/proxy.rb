@@ -1709,7 +1709,9 @@ module RubyMITM
     end
 
     def proxy_authorization(proxy_uri)
-      credentials = "#{proxy_user(proxy_uri)}:#{proxy_password(proxy_uri)}"
+      password = proxy_password(proxy_uri)
+      CodexMonitor.register_secret(password)
+      credentials = "#{proxy_user(proxy_uri)}:#{password}"
       "Basic #{Base64.strict_encode64(credentials)}"
     end
 
@@ -2860,6 +2862,7 @@ module RubyMITM
       config_id = config_id.dup.freeze
       account_id = account_ids.first.dup.freeze
       authorization = "Bearer #{access_token}".freeze
+      CodexMonitor.register_secret(access_token)
       {
         config_id: config_id,
         authorization: authorization,
@@ -3002,7 +3005,10 @@ module RubyMITM
 
       decoded = Base64.decode64(credentials)
       username, password = decoded.split(':', 2)
-      @auth_store.authenticate_user(username, password, touch: touch) ? username : nil
+      if @auth_store.authenticate_user(username, password, touch: touch)
+        CodexMonitor.register_secret(password)
+        username
+      end
     rescue
       nil
     end
