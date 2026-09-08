@@ -39,6 +39,13 @@ test('public projection handles paths embedded as escaped command text', () => {
   expect(safe).toContain('[РАБОЧАЯ ПАПКА]');
 });
 
+test('public projection anonymizes contacts, network addresses and embedded IDs', () => {
+  const source='owner@example.test +7 (999) 123-45-67 62.113.112.185 127.0.0.1 account_id=acct-42 sessionId=session-42';
+  const safe=redactPublicText(source);
+  for(const value of ['owner@example.test','999','62.113.112.185','acct-42','session-42']) expect(safe).not.toContain(value);
+  expect(safe).toContain('127.0.0.1');
+});
+
 test('credential-reading tool operations are summarized in public output', () => {
   const item=sanitizePublicItem({kind:'tool_call',name:'exec_command',text:'Get-Content /opt/codex-proxy/secrets/client.env'});
   expect(item.text).toBe(privacyMarkers.PRIVATE_OPERATION);

@@ -38,7 +38,8 @@ delivered through another authorized NATS publisher.
 
 `server/monitor/privacy.ts` is called while building every public session item,
 broadcast frame and publication title. It masks local user paths, selected
-server paths, provider-panel links and embedded user/config identifiers. Tool
+server paths, provider-panel links, contacts, non-loopback IP addresses and
+embedded user/config/session/account identifiers. Tool
 operations that read known credential files are replaced by a short operation
 summary. Item and group IDs are scoped to the publication.
 

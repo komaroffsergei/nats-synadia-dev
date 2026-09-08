@@ -59,6 +59,13 @@ export function redactPublicText(input: unknown, options: { kind?: string } = {}
   if (/(?:\.htpasswd|mitm-ca\.key|\.env(?:\.|\b)|(?:keys|auth)\.json|credentials?\.(?:json|ya?ml))/i.test(text)) text = text.replace(/\S*(?:\.htpasswd\S*|mitm-ca\.key|[\w.-]*\.env(?:\.[\w.-]+)?|(?:keys|auth)\.json|credentials?\.(?:json|ya?ml))\S*/gi, '[СЕКРЕТНЫЙ ФАЙЛ]');
   if (/(?:proxy_username|userLabel|PROXY_USER|MONITOR_USERS|username|login)/i.test(text)) text = text.replace(/((?:proxy_username|userLabel|PROXY_USER|MONITOR_USERS|username|login)\s*["']?\s*[:=]\s*["']?)[^\s"'`,;}]+/gi, '$1[ПОЛЬЗОВАТЕЛЬ]');
   if (/(?:configId|active_config_id|config_id)/i.test(text)) text = text.replace(/((?:configId|active_config_id|config_id)\s*["']?\s*[:=]\s*["']?)[^\s"'`,;}]+/gi, '$1[КОНФИГУРАЦИЯ]');
+  if (/(?:sessionId|session_id|accountId|account_id|tenantId|tenant_id|connectionId|connection_id)/i.test(text)) text = text.replace(/((?:sessionId|session_id|accountId|account_id|tenantId|tenant_id|connectionId|connection_id)\s*["']?\s*[:=]\s*["']?)[A-Za-z0-9:_./-]+/gi, '$1[ИДЕНТИФИКАТОР]');
+  if (text.includes('@')) text = text.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[EMAIL]');
+  text = text.replace(/(?<![\w.])(?:\+?\d[\s()-]*){10,15}(?![\w.])/g, '[ТЕЛЕФОН]');
+  text = text.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, value => {
+    const octets=value.split('.').map(Number);
+    return octets.every(part=>part>=0&&part<=255) && octets[0]!==127 ? '[IP]' : value;
+  });
   return text;
 }
 
