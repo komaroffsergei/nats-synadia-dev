@@ -84,8 +84,10 @@ export class BroadcastStore {
       try {
         const previous=row.recording ? JSON.parse(row.recording) : null;
         const end=new Date().toISOString();
-        const next=this.record({...row,end_at:end,after_seq:summary.replayCursor || 0,prior:previous?.frames});
-        if(previous?.frames?.length) {
+        let next:any;
+        try {next=previous?.format==='final_items' ? this.compactRecording(row,previous) : this.record({...row,end_at:end,after_seq:summary.replayCursor || 0,prior:previous?.frames});}
+        catch(error) {if((error as Error).message!=='recording_too_large') throw error;next=this.compactRecording(row,previous);}
+        if(previous?.frames?.length && next.format!=='final_items') {
           const seen=new Map(previous.frames.map((f:any)=>[f.item.itemId,f.item]));
           const extra=next.frames.filter((f:any)=>{
             const old:any=seen.get(f.item.itemId);seen.set(f.item.itemId,f.item);
@@ -95,6 +97,7 @@ export class BroadcastStore {
           next.partial=previous.partial || next.partial;
           next.durationMs=Date.parse(end)-Date.parse(row.start_at);
         }
+        if(next.frames.length>6000 || Buffer.byteLength(JSON.stringify(next))>RECORD_LIMIT) next=this.compactRecording(row,previous);
         const recording=JSON.stringify(next);
         const used=(this.monitor.db.query('SELECT COALESCE(SUM(length(CAST(recording AS BLOB))),0) n FROM broadcasts WHERE id<>?').get(row.id) as any).n;
         if(Buffer.byteLength(recording)>RECORD_LIMIT || next.frames.length>6000) throw Error('recording_too_large');
@@ -111,6 +114,21 @@ export class BroadcastStore {
     }
     if(this.replayCache.size>=50) this.replayCache.clear();
     this.replayCache.set(row.id,{key,row});return row;
+  }
+  private compactRecording(row:any,previous:any) {
+    // A long live session may have thousands of revisions of the same text.
+    // Preserve the full final item text, not every intermediate prefix.
+    const frames=new Map<string,any>((previous?.frames || []).map((f:any)=>[f.item.itemId,f]));
+    const source=this.monitor.db.query('SELECT model,partial FROM sessions WHERE id=?').get(row.session_id) as any;
+    for(const raw of this.monitor.db.query('SELECT at,body FROM items WHERE session_id=? AND at>=? ORDER BY seq LIMIT 6001').iterate(row.session_id,row.start_at) as Iterable<any>) {
+      const data=JSON.parse(raw.body),item=this.item(row.id,{...data,at:raw.at});
+      frames.set(item.itemId,{offsetMs:Math.max(0,Date.parse(raw.at)-Date.parse(row.start_at)),item});
+      if(frames.size>6000) throw Error('recording_too_large');
+    }
+    const result={format:'final_items',frames:[...frames.values()].sort((a,b)=>a.offsetMs-b.offsetMs),durationMs:Math.max(1000,Date.now()-Date.parse(row.start_at)),model:source?.model || previous?.model,partial:!!source?.partial || !!previous?.partial,source:'Codex proxy',items:[]};
+    if(!result.frames.length) throw Error('recording_unavailable');
+    if(Buffer.byteLength(JSON.stringify(result))>RECORD_LIMIT) throw Error('recording_too_large');
+    return result;
   }
   metadata(row: any, owner = false) {
     const recording = JSON.parse(row.summary || '{}');

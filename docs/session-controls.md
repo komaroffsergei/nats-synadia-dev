@@ -29,3 +29,5 @@
 | Переход live/replay на сайте | `portfolio-site/src/app/live-broadcast.ts`, `live-log.ts` |
 
 Проверки: `bun test examples/agent-web-ui/server/monitor/`, `ruby docker/monitor/observer_test.rb`, Vue typecheck/build, Angular production build и браузерный проход live → replay → live → replay. Новые схемы SQLite добавляются без удаления старых таблиц; предыдущие образы совместимы и сохраняются для отката.
+
+Для длинных живых сессий автоповтор переходит в формат final_items: промежуточные версии одного элемента объединяются, полный доступный текст сохраняется. Пределы количества элементов и общего размера продолжают действовать. Это изменение не затрагивает ручные записи выбранного фрагмента.

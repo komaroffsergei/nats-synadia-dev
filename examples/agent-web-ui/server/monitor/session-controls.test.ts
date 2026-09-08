@@ -57,3 +57,16 @@ test('live publication repeats when idle, new request preempts, history survives
   b.update(row.id,{visible:false},'owner');expect(b.public(row.id)).toBeNull();
  } finally {s.db.close();}
 });
+
+test('long live history compacts revisions into full text items instead of disabling replay',()=>{
+ const s=new MonitorStore(':memory:'),b=new BroadcastStore(s),old=new Date(Date.now()-60_000).toISOString();let sid='';
+ try {
+  for(let n=1;n<=6100;n++) {
+   const e:any={version:1,eventId:`e${n}`,sequence:n,epoch:'e',producer:'proxy',tenantId:'t',connectionId:'c',sessionId:'s',correlation:'explicit',at:old,type:'item.snapshot',data:{itemId:'answer',role:'assistant',kind:'message',text:'Полный текст сообщения '+n,revision:n,complete:true}};
+   s.apply(e);sid=s.scopeId(e);
+  }
+  const p=b.prepare({sessionId:sid,title:'Example',mode:'live',from:old,repeatWhenIdle:true},'owner');const row=b.publish(p.draftId,'owner');
+  b.captureIdle();const recording=b.public(row.id)!;
+  expect(recording.mode).toBe('replay');expect(recording.format).toBe('final_items');expect(recording.frames).toHaveLength(1);expect(recording.frames[0].item.text).toBe('Полный текст сообщения 6100');expect(recording.replayProblem).toBeNull();
+ } finally{s.db.close();}
+});
