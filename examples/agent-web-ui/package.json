@@ -1,25 +1,19 @@
 {
-  "name": "synadia-nats-agents-web-ui",
+  "name": "codex-monitor-ui",
   "version": "0.1.0",
-  "description": "Bun + Vue 3 web UI copied from Synadia agent-web-ui for the local NATS agents demo.",
+  "description": "Codex Monitor: Vue console and Bun server over native NATS.",
   "keywords": [
+    "codex",
     "nats",
-    "agents",
-    "agent-protocol",
+    "monitor",
     "vue",
-    "bun",
-    "synadia-agents"
+    "bun"
   ],
   "license": "Apache-2.0",
-  "author": "Synadia Communications",
+  "author": "Sergey Komarov",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/synadia-ai/synadia-agents.git",
-    "directory": "examples/agent-web-ui"
-  },
-  "homepage": "https://github.com/synadia-ai/synadia-agents/tree/main/examples/agent-web-ui",
-  "bugs": {
-    "url": "https://github.com/synadia-ai/synadia-agents/issues"
+    "url": "git+https://github.com/komaroffsergei/nats-synadia-dev.git"
   },
   "private": true,
   "type": "module",
@@ -38,8 +32,7 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "@nats-io/transport-node": "^3.4.0",
-    "@synadia-ai/agents": "0.5.1"
+    "@nats-io/transport-node": "^3.4.0"
   },
   "devDependencies": {
     "@types/bun": "latest",

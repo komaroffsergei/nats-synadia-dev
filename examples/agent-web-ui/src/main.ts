@@ -1,6 +1,6 @@
 import { createApp } from "vue";
 import "./style.css";
-import App from "./App.vue";
+import YouTrackStatus from "./YouTrackStatus.vue";
 import MonitorApp from "./MonitorApp.vue";
 
-createApp(location.pathname.startsWith('/console/youtrack') ? App : MonitorApp).mount("#app");
+createApp(location.pathname.startsWith('/console/youtrack') ? YouTrackStatus : MonitorApp).mount("#app");

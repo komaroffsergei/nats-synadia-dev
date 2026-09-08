@@ -4,17 +4,11 @@ import { connectNats, decodeUtf8, formatError, tryDecodeJson } from "./common.js
 //
 // Он не участвует в работе gateway-а, worker-а и agents.
 // Его задача - показать глазами, какие subjects реально бегают по NATS:
-// - agents.prompt.*    пользовательские prompt request-ы;
-// - agents.hb.*        heartbeats от AgentService;
-// - agents.status.*    status/discovery request-ы;
 // - youtrack.codex.*   JetStream jobs/results;
 // - _INBOX.*           reply subjects для request/reply.
 function messageKind(subject) {
   // Грубая классификация только для красивого вывода в терминал.
   // Transport остаётся тем же самым NATS subject-ом, мы ничего не парсим глубоко.
-  if (subject.startsWith("agents.hb.")) return "heartbeat";
-  if (subject.startsWith("agents.prompt.")) return "prompt";
-  if (subject.startsWith("agents.status.")) return "status";
   if (subject.startsWith("youtrack.codex.jobs.")) return "codex-job";
   if (subject.startsWith("youtrack.codex.results.")) return "codex-result";
   if (subject.startsWith("youtrack.messages.")) return "youtrack-chat";
@@ -45,7 +39,6 @@ async function main() {
 
   for await (const msg of sub) {
     // msg.reply показывает, что это request/reply вызов.
-    // Например prompt request приходит на agents.prompt.*, а ответ агент шлёт
     // в временный reply subject вида _INBOX...
     const reply = msg.reply ? ` reply=${msg.reply}` : "";
     console.log(`\n[${new Date().toISOString()}] ${messageKind(msg.subject)} ${msg.subject}${reply}`);

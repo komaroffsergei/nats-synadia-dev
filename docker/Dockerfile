@@ -22,7 +22,7 @@ RUN npm run ui:build
 
 ENV HOST=0.0.0.0
 ENV PORT=3300
-ENV NATS_URL=nats://nats-synadia-dev_nats:4222
+ENV NATS_URL=nats://nats:4222
 
 EXPOSE 3300
 

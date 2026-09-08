@@ -1,9 +1,9 @@
 {
-  "name": "synadia-nats-agents",
+  "name": "codex-monitor",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "YouTrack webhook to JetStream to Codex worker demo for Synadia NATS agents.",
+  "description": "Codex proxy event monitor and YouTrack worker over NATS JetStream.",
   "scripts": {
     "nats": "nats-server -c nats.conf",
     "monitor": "node src/monitor.js",
@@ -18,12 +18,10 @@
   },
   "dependencies": {
     "@nats-io/jetstream": "^3.4.0",
-    "@nats-io/services": "^3.4.0",
     "@nats-io/transport-node": "^3.4.0",
     "@openai/codex-sdk": "^0.134.0",
-    "@synadia-ai/agent-service": "0.5.2",
-    "@synadia-ai/agents": "0.5.1",
     "dotenv": "^16.4.7",
     "typebox": "^1.1.38"
-  }
+  },
+  "devDependencies": {}
 }

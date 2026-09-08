@@ -1,253 +1,47 @@
-// synadia-nats-agents web UI — Bun server entry point.
-//
-// Этот процесс держит один или несколько @synadia-ai/agents Client-ов
-// (по одному на каждую независимую NATS-шину) и обслуживает:
-//   - GET /ws     → WebSocket; each connection gets a fresh Bridge.
-//   - everything else → static files from ./dist/ (SPA fallback to index.html).
-//
-// В --dev режиме static files не раздаются; открывай Vite dev server :5173,
-// который proxy-ит /ws обратно сюда на :3300.
-
-import { join, extname } from "node:path";
-import { existsSync, statSync } from "node:fs";
-import {
-  Agents,
-  SDK_PROTOCOL_VERSION,
-  parseNatsUrl,
-  type NatsConnection,
-} from "@synadia-ai/agents";
-import {
-  connect as natsConnect,
-  type NodeConnectionOptions,
-} from "@nats-io/transport-node";
-import { parseConfig, type NatsConnectionConfig } from "./config.ts";
-import { Bridge, formatSdkProtocolVersion, type BridgeConnection, type BridgeWsData } from "./bridge.ts";
-
-const config = parseConfig(Bun.argv);
-let defaultConnectionsPromise: Promise<BridgeConnection[]> | null = null;
-type OpenedConnections = { connections: BridgeConnection[]; closeWithBridge: boolean };
-
-async function buildConnectOptions(connection: NatsConnectionConfig): Promise<NodeConnectionOptions> {
-  return { ...parseNatsUrl(connection.servers), name: `testui-${connection.id}` };
+// Codex Monitor: static Vue UI, native NATS readiness and YouTrack HTTP ingress.
+import { resolve, extname, sep } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { connect, type NatsConnection } from '@nats-io/transport-node';
+// @ts-ignore Shared ESM helper also used by the Node gateway and worker.
+import { natsOptions } from '../../../src/nats-options.js';
+import { parseConfig } from './config.ts';
+const config=parseConfig(Bun.argv),dist=resolve(import.meta.dir,'../dist');
+const gateway=(process.env.YOUTRACK_WEBHOOK_PROXY_TARGET||'http://127.0.0.1:3401').replace(/\/+$/,'');
+let connection:Promise<NatsConnection>|undefined;
+function getConnection(){
+  connection??=connect({...natsOptions(config.connections[0]!.servers),name:'codex-monitor-ui'}).catch(e=>{connection=undefined;throw e;});return connection;
 }
-
-async function openBridgeConnection(connection: NatsConnectionConfig): Promise<BridgeConnection> {
-  const connectOpts = await buildConnectOptions(connection);
-  const nc: NatsConnection = await natsConnect(connectOpts);
-  const agents = new Agents({ nc });
-  console.log(`[testui] NATS client connected label=${connection.label} (servers=${redactNatsUrl(connection.servers)})`);
-  return { ...connection, nc, agents };
-}
-
-const distDir = join(import.meta.dir, "..", "dist");
-const sdkVersionString = formatSdkProtocolVersion(SDK_PROTOCOL_VERSION);
-const youtrackProxyTarget = (process.env["YOUTRACK_WEBHOOK_PROXY_TARGET"] || "http://127.0.0.1:3401").replace(/\/+$/, "");
-
-async function openConnections(connections: NatsConnectionConfig[]): Promise<BridgeConnection[]> {
-  return Promise.all(connections.map(openBridgeConnection));
-}
-
-function getDefaultConnections(): Promise<BridgeConnection[]> {
-  // Env/CLI/default подключения шарятся между всеми браузерными WebSocket-ами.
-  // Это обычный режим работы UI: один Bun process держит один набор NATS
-  // clients, а каждое окно браузера получает только свой Bridge state.
-  defaultConnectionsPromise ??= openConnections(config.connections);
-  return defaultConnectionsPromise;
-}
-
-async function closeConnections(connections: BridgeConnection[]): Promise<void> {
-  for (const connection of connections) {
-    try {
-      await connection.agents.close();
-    } catch (e) {
-      console.warn(`[testui] agents.close() failed for ${connection.label}:`, (e as Error).message);
-    }
-    try {
-      await connection.nc.close();
-    } catch {
-      /* noop */
-    }
-  }
-}
-
-function redactNatsUrl(value: string): string {
-  // NATS URLs can carry token or user:password before `@`.
-  // Health checks and logs should show the endpoint, not secret material.
-  return value.replace(/((?:nats|tls|ws|wss)(?:\+[^:]+)?:\/\/)([^@,\/]+)@/g, "$1<redacted>@");
-}
-
-async function proxyYouTrackRequest(req: Request, url: URL): Promise<Response> {
-  // Production ingress у stack-а открыт только на публичный UI service port 3300.
-  // Сам YouTrack Codex agent слушает локальный HTTP port 3401 внутри того же
-  // container-а, поэтому публичные `/youtrack/*` запросы прокидываем отсюда.
-  //
-  // Это даёт один внешний URL для YouTrack Webhook Triggers App:
-  //   https://nats-synadia-dev.gis-master.ru/youtrack/webhook
-  //
-  // А локальный agent остаётся недоступен напрямую извне.
-  const targetUrl = new URL(`${youtrackProxyTarget}${url.pathname}${url.search}`);
-  const headers = new Headers(req.headers);
-  headers.set("x-forwarded-host", url.host);
-  headers.set("x-forwarded-proto", url.protocol.replace(":", ""));
-
-  return fetch(targetUrl, {
-    method: req.method,
-    headers,
-    body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
-    redirect: "manual",
-  });
-}
-
-async function fetchGatewayHealth(): Promise<Record<string, unknown> & { ok: boolean }> {
+async function health(){
   try {
-    const response = await fetch(`${youtrackProxyTarget}/healthz`, {
-      redirect: "manual",
-      signal: AbortSignal.timeout(5_000),
-    });
-    const payload = await response.json().catch(() => ({}));
-    return {
-      ok: response.ok && (payload as { ok?: unknown }).ok !== false,
-      status: response.status,
-      ...(payload && typeof payload === "object" ? payload as Record<string, unknown> : {}),
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      error: (error as Error).message,
-    };
-  }
+    const nc=await getConnection();await nc.flush();
+    const r=await fetch(gateway+'/healthz',{signal:AbortSignal.timeout(5000)});
+    const g=await r.json() as {ok:boolean};const ok=r.ok&&g.ok&&!nc.isClosed();
+    return Response.json({ok,service:'codex-monitor',nats:{connected:!nc.isClosed()},gateway:g},{status:ok?200:503});
+  } catch { return Response.json({ok:false,service:'codex-monitor',error:'dependency_unavailable'},{status:503}); }
 }
-
-const server = Bun.serve<BridgeWsData>({
-  hostname: config.host,
-  port: config.port,
-  async fetch(req, srv) {
-    const url = new URL(req.url);
-
-    if (url.pathname.startsWith("/youtrack/")) {
-      return proxyYouTrackRequest(req, url);
-    }
-
-    if (url.pathname === "/healthz") {
-      let opened: OpenedConnections;
-      try {
-        opened = { connections: await getDefaultConnections(), closeWithBridge: false };
-      } catch (error) {
-        return Response.json(
-          {
-            ok: false,
-            service: "synadia-nats-agents-web-ui",
-            error: (error as Error).message,
-          },
-          { status: 503 },
-        );
+const server=Bun.serve({hostname:config.host,port:config.port,
+  async fetch(req){
+    const u=new URL(req.url);
+    if(u.pathname==='/healthz')return health();
+    if(u.pathname==='/ws')return Response.json({error:'agent_protocol_removed',console:'/console/'},{status:410});
+    if(u.pathname.startsWith('/youtrack/')){
+      const readPaths=['/youtrack/api-check','/youtrack/jobs/last','/youtrack/webhooks/last','/youtrack/dry-run-state'];
+      if(u.pathname==='/youtrack/status'){
+        if(req.method!=='GET')return new Response(null,{status:405});return health();
       }
-      const natsConnections = opened.connections;
-      const body = {
-        ok: true,
-        service: "synadia-nats-agents-web-ui",
-        nats: {
-          mode: natsConnections.length > 1 ? "multi" : "servers",
-          connections: natsConnections.map((connection) => ({
-            id: connection.id,
-            label: connection.label,
-            value: redactNatsUrl(connection.servers),
-            server: connection.nc.getServer() || null,
-          })),
-        },
-        sdkProtocolVersion: sdkVersionString,
-      };
-      const gateway = await fetchGatewayHealth();
-      const ok = body.ok && gateway.ok;
-      return Response.json({
-        ...body,
-        gateway,
-        ok,
-      }, { status: ok ? 200 : 503 });
+      const allowed=req.method==='GET'&&readPaths.includes(u.pathname) || req.method==='POST'&&u.pathname==='/youtrack/webhook';
+      if(!allowed)return Response.json({error:'not_found'},{status:404});
+      try{return await fetch(gateway+u.pathname+u.search,{method:req.method,headers:req.headers,body:req.method==='POST'?req.body:undefined,redirect:'manual',signal:AbortSignal.timeout(15000)});}
+      catch{return Response.json({error:'gateway_unavailable'},{status:502});}
     }
-
-    if (url.pathname === "/ws") {
-      let opened: OpenedConnections;
-      try {
-        opened = { connections: await getDefaultConnections(), closeWithBridge: false };
-      } catch (error) {
-        return Response.json(
-          {
-            ok: false,
-            error: "nats_connect_failed",
-            message: (error as Error).message,
-          },
-          { status: 502 },
-        );
-      }
-      const bridge = new Bridge(opened.connections, sdkVersionString, opened.closeWithBridge);
-      const upgraded = srv.upgrade(req, { data: { bridge } });
-      if (upgraded) return undefined;
-      bridge.close();
-      return new Response("expected WebSocket upgrade on /ws", { status: 400 });
-    }
-
-    // Static file serving from dist/ when available.
-    if (existsSync(distDir)) {
-      const safePath = url.pathname === "/" ? "/index.html" : url.pathname;
-      const filePath = join(distDir, decodeURIComponent(safePath));
-      // Reject path traversal outside dist/.
-      if (!filePath.startsWith(distDir)) {
-        return new Response("forbidden", { status: 403 });
-      }
-      if (existsSync(filePath) && statSync(filePath).isFile()) {
-        return new Response(Bun.file(filePath));
-      }
-      // SPA fallback for extensionless routes.
-      if (!extname(url.pathname)) {
-        return new Response(Bun.file(join(distDir, "index.html")));
-      }
-      return new Response("not found", { status: 404 });
-    }
-
-    if (config.dev) {
-      return new Response(
-        "Dev mode: open http://localhost:5173 (run `bun run vite` in another terminal).\nThis port only serves /ws in dev.\n",
-        { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8" } },
-      );
-    }
-    return new Response(
-      "No dist/ found. Run `bun run build` to produce it, then `bun run start` again.\n",
-      { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8" } },
-    );
-  },
-  websocket: {
-    open(ws) {
-      ws.data.bridge.open(ws);
-    },
-    message(ws, msg) {
-      const text = typeof msg === "string" ? msg : new TextDecoder().decode(msg);
-      ws.data.bridge.onMessage(text);
-    },
-    close(ws) {
-      ws.data.bridge.close();
-    },
+    if(req.method!=='GET'&&req.method!=='HEAD')return new Response(null,{status:405});
+    let path:string;try{path=resolve(dist,'.'+decodeURIComponent(u.pathname));}catch{return new Response(null,{status:400});}
+    if(path!==dist&&!path.startsWith(dist+sep))return new Response(null,{status:403});
+    if(existsSync(path)&&statSync(path).isFile())return new Response(Bun.file(path));
+    if(!extname(u.pathname)&&existsSync(resolve(dist,'index.html')))return new Response(Bun.file(resolve(dist,'index.html')));
+    return new Response('Not found',{status:404});
   },
 });
-
-console.log(`[testui] listening on http://${config.host}:${server.port} (sdk protocol ${sdkVersionString})`);
-if (config.dev) {
-  console.log(`[testui] dev mode — open http://localhost:5173 (Vite)`);
-} else if (!existsSync(distDir)) {
-  console.log(`[testui] no dist/ found; run \`bun run build\` to serve the UI from this port`);
-}
-
-async function shutdown(sig: NodeJS.Signals): Promise<void> {
-  console.log(`[testui] received ${sig}, shutting down...`);
-  try {
-    server.stop();
-  } catch {
-    /* noop */
-  }
-  const defaultConnections = defaultConnectionsPromise ? await defaultConnectionsPromise.catch(() => []) : [];
-  await closeConnections(defaultConnections);
-  process.exit(0);
-}
-
-process.on("SIGINT", () => void shutdown("SIGINT"));
-process.on("SIGTERM", () => void shutdown("SIGTERM"));
+console.log(`[codex-monitor] listening on ${config.port}`);
+async function stop(){server.stop();await (await connection?.catch(()=>undefined))?.drain();process.exit(0);}
+process.on('SIGTERM',()=>void stop());process.on('SIGINT',()=>void stop());

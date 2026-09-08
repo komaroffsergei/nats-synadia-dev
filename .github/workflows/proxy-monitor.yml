@@ -21,6 +21,7 @@ jobs:
           ruby-version: '3.3'
       - run: gem install minitest --no-document
       - run: ruby docker/monitor/observer_test.rb
+      - run: node --test src/nats-options.test.js
       - run: npm ci --omit=dev
       - run: bun install --frozen-lockfile
         working-directory: examples/agent-web-ui

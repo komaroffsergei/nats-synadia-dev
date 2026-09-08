@@ -1,5 +1,5 @@
 export class YouTrackMcpClient {
-  constructor({ url, timeoutMs = 15_000, clientName = "synadia-nats-agents", clientVersion = "0.1.0" } = {}) {
+  constructor({ url, timeoutMs = 15_000, clientName = "codex-monitor", clientVersion = "0.1.0" } = {}) {
     this.url = normalizeMcpUrl(url);
     this.timeoutMs = Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : 15_000;
     this.clientName = clientName;

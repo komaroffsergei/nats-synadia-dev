@@ -1,5 +1,5 @@
 import { connect } from "@nats-io/transport-node";
-import { parseNatsUrl } from "@synadia-ai/agents";
+import { natsOptions } from "./nats-options.js";
 import { config as loadDotenv } from "dotenv";
 import { fileURLToPath } from "node:url";
 
@@ -32,7 +32,7 @@ export function envFlag(name, defaultValue = false) {
 
 export async function connectNats(name) {
   return connect({
-    ...parseNatsUrl(NATS_URL),
+    ...natsOptions(NATS_URL),
     name,
   });
 }

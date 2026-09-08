@@ -1,6 +1,5 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { AgentService } from "@synadia-ai/agent-service";
 import {
   SERVICE_VERSION,
   connectNats,
@@ -42,11 +41,10 @@ const CODEX_SESSION_FIELD = env("YOUTRACK_CODEX_SESSION_FIELD", "Codex Session I
 const API_CHECK_ISSUE = env("YOUTRACK_API_CHECK_ISSUE", "");
 const API_CHECK_PROJECT = env("YOUTRACK_API_CHECK_PROJECT", "");
 const MUTE_NOTIFICATIONS = envFlag("YOUTRACK_MUTE_NOTIFICATIONS", false);
-const PROMPT_SUBJECT = `agents.prompt.${YOUTRACK_AGENT}.${YOUTRACK_OWNER}.${YOUTRACK_NAME}`;
 const youtrackMcp = new YouTrackMcpClient({
   url: YOUTRACK_MCP_URL,
   timeoutMs: YOUTRACK_MCP_TIMEOUT_MS,
-  clientName: "synadia-nats-agents",
+  clientName: "codex-monitor",
   clientVersion: SERVICE_VERSION,
 });
 
@@ -191,12 +189,10 @@ async function publishWebhookChatMessage(nc, event) {
 
   nc.publish(AGENT_MESSAGE_SUBJECT, encodeJson({
     type: "youtrack.agent_message",
-    promptSubject: PROMPT_SUBJECT,
     agent: {
       agent: YOUTRACK_AGENT,
       owner: YOUTRACK_OWNER,
       name: YOUTRACK_NAME,
-      promptSubject: PROMPT_SUBJECT,
     },
     message: {
       receivedAt: nowIso(),
@@ -481,7 +477,6 @@ async function handleHttp(req, context) {
         ok: jetstreamStatus.ok,
         service: "youtrack-codex-gateway",
         agent: {
-          promptSubject: PROMPT_SUBJECT,
           messageSubject: AGENT_MESSAGE_SUBJECT,
         },
         webhook: {
@@ -755,82 +750,10 @@ async function youtrackRequest(path, { method = "GET", params = {}, body } = {})
   };
 }
 
-async function handlePrompt(envelope, response, nc) {
-  const prompt = String(envelope.prompt || "").toLowerCase();
-  if (prompt.includes("health") || prompt.includes("status")) {
-    const readiness = await jetStreamReadiness(nc);
-    await response.send(JSON.stringify({
-      service: "youtrack-codex-gateway",
-      promptSubject: PROMPT_SUBJECT,
-      messageSubject: AGENT_MESSAGE_SUBJECT,
-      jetstream: readiness,
-      recentJobs: recentJobs.slice(0, 5),
-      recentResults: recentResults.slice(0, 5),
-      youtrack: {
-        mode: youtrackMode(),
-        baseUrl: YOUTRACK_BASE_URL,
-        mcpUrl: YOUTRACK_MCP_URL || null,
-        access: youtrackAccessStatus(),
-      },
-      dryRun: YOUTRACK_DRY_RUN,
-    }, null, 2));
-    return;
-  }
-
-  if (prompt.includes("hook") || prompt.includes("job")) {
-    await response.send(JSON.stringify({
-      webhooks: recentWebhookEvents.slice(0, 5),
-      jobs: recentJobs.slice(0, 10),
-      results: recentResults.slice(0, 10),
-    }, null, 2));
-    return;
-  }
-
-  await response.send([
-    "YouTrack/Codex gateway is running.",
-    `Webhook: ${PUBLIC_WEBHOOK_URL || "/youtrack/webhook"}`,
-    `JetStream stream: ${YT_CODEX_STREAM}`,
-    `Jobs: ${YT_CODEX_JOB_SUBJECT}`,
-    `Results: ${YT_CODEX_RESULT_SUBJECT}`,
-    "",
-    "Try: health, hooks, jobs",
-  ].join("\n"));
-}
-
 async function main() {
   const nc = await connectNats("youtrack-codex-gateway");
   const { js } = await openJetStream(nc);
   const stopResultConsumer = await startResultConsumer(js);
-
-  const service = new AgentService({
-    nc,
-    agent: YOUTRACK_AGENT,
-    owner: YOUTRACK_OWNER,
-    name: YOUTRACK_NAME,
-    session: YOUTRACK_NAME,
-    version: SERVICE_VERSION,
-    attachmentsOk: false,
-    description: "YouTrack webhook gateway for Codex task analysis.",
-    extraMetadata: {
-      role: "youtrack-codex-gateway",
-      youtrack_mode: youtrackMode(),
-      youtrack_base_url: YOUTRACK_BASE_URL,
-      youtrack_mcp_url: YOUTRACK_MCP_URL || "",
-      webhook_path: "/youtrack/webhook",
-      message_subject: AGENT_MESSAGE_SUBJECT,
-      job_subject: YT_CODEX_JOB_SUBJECT,
-      result_subject: YT_CODEX_RESULT_SUBJECT,
-    },
-  });
-
-  service.onPrompt(async (envelope, response) => {
-    try {
-      await handlePrompt(envelope, response, nc);
-    } catch (error) {
-      await response.send(`YouTrack/Codex gateway error: ${formatError(error)}`);
-    }
-  });
-  await service.start();
 
   const context = { nc, js };
   const httpServer = createServer((req, res) => {
@@ -842,7 +765,6 @@ async function main() {
   });
   await new Promise((resolve) => httpServer.listen(WEBHOOK_PORT, WEBHOOK_HOST, resolve));
 
-  console.log(`[youtrack:gateway] ${service.subject.prompt}`);
   console.log(`[youtrack:gateway] webhook=http://${WEBHOOK_HOST}:${WEBHOOK_PORT}/youtrack/webhook`);
   console.log(`[youtrack:gateway] message subject=${AGENT_MESSAGE_SUBJECT}`);
   console.log(`[youtrack:gateway] jobs=${YT_CODEX_JOB_SUBJECT} results=${YT_CODEX_RESULT_SUBJECT}`);
@@ -851,7 +773,6 @@ async function main() {
   const stop = async () => {
     stopResultConsumer();
     await new Promise((resolve) => httpServer.close(resolve));
-    await service.stop();
     await nc.drain();
   };
   process.once("SIGINT", () => {

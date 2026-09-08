@@ -1,0 +1,3 @@
+Codex Monitor includes UI styles derived from the Synadia agent-web-ui example.
+Copyright 2026 Synadia Communications. Licensed under Apache-2.0; see LICENSE.
+The active runtime no longer depends on the Synadia Agents SDK.

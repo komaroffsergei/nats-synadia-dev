@@ -7,7 +7,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(scriptDir, "..");
 const uiDir = join(rootDir, "examples", "agent-web-ui");
 
-const natsUrl = process.env.NATS_URL || "nats://nats-synadia-dev_nats:4222";
+const natsUrl = process.env.NATS_URL || "nats://nats:4222";
 const natsUrlsJson = process.env.NATS_URLS_JSON || "";
 const port = process.env.PORT || "3300";
 const youtrackWebhookPort = process.env.YOUTRACK_WEBHOOK_PORT || "3401";
@@ -28,7 +28,7 @@ const childEnv = {
   YOUTRACK_WEBHOOK_PROXY_TARGET: process.env.YOUTRACK_WEBHOOK_PROXY_TARGET || `http://127.0.0.1:${youtrackWebhookPort}`,
   YOUTRACK_PUBLIC_WEBHOOK_URL:
     process.env.YOUTRACK_PUBLIC_WEBHOOK_URL ||
-    "https://nats-synadia-dev.gis-master.ru/youtrack/webhook",
+    "https://agents.komaroff-dev.ru/youtrack/webhook",
   YOUTRACK_AGENT_MESSAGE_SUBJECT: process.env.YOUTRACK_AGENT_MESSAGE_SUBJECT || "youtrack.messages.giscloud.codex",
 };
 

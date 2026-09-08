@@ -1,1 +1,12 @@
-{"name":"portfolio-nats-demo","version":"1.0.0","private":true,"type":"module","dependencies":{"@nats-io/jetstream":"3.4.0","@nats-io/transport-node":"3.4.0","@synadia-ai/agents":"0.5.1","dotenv":"16.6.1"}}
+{
+  "name": "codex-monitor-queue",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@nats-io/jetstream": "3.4.0",
+    "@nats-io/transport-node": "3.4.0",
+    "codex-monitor": "file:..",
+    "dotenv": "16.6.1"
+  }
+}

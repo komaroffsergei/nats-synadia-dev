@@ -5,7 +5,7 @@ digraph G {
 
   youtrack [label="YouTrack\nyt.giscloud.ru", fillcolor="#dbeafe"];
   app [label="Сервис app\nUI + gateway", fillcolor="#e0f2fe"];
-  ui [label="Synadia Web UI\nVue + Bun bridge", fillcolor="#ecfeff"];
+  ui [label="Codex Monitor UI\nVue + Bun server", fillcolor="#ecfeff"];
   gateway [label="Gateway-агент YouTrack\nagents.prompt.youtrack.giscloud.codex", fillcolor="#f3e8ff"];
   nats [label="NATS + JetStream\nстрим YT_CODEX", fillcolor="#dcfce7"];
   worker [label="codex_worker\n@openai/codex-sdk", fillcolor="#fae8ff"];

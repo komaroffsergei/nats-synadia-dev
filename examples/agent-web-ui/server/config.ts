@@ -1,7 +1,7 @@
-// CLI + env parser for the server-side NATS bridge.
+// CLI + env parser for the Codex Monitor server.
 //
 // NATS_URL is the primary bus used by the app and worker. NATS_URLS_JSON is
-// only for UI discovery across several independent NATS buses.
+// legacy configuration; Codex Monitor uses the primary NATS connection.
 
 export type NatsConnectionConfig = {
   id: string;
