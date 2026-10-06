@@ -59,7 +59,9 @@ stream splits, public paths and identities, tool summaries, titles, legacy
 SQLite items and legacy replay recordings. The original value must be absent
 from every generated public payload.
 
-Pattern matching cannot classify arbitrary prose perfectly. Publication still
-requires the existing owner preview and explicit publication action. When a
-tool operation accesses credential storage, the public representation favors a
-summary over raw output.
+Pattern matching cannot classify arbitrary prose perfectly. Full-text publication
+still requires the existing owner preview and explicit publication action.
+Automatic activity is a separate public type: its server output is assembled
+only from fixed event categories and timestamps. It never copies session titles,
+prompts, answers, tool arguments, tool results, model names or raw error text.
+The owner can pause automatic activity or hide an individual session.

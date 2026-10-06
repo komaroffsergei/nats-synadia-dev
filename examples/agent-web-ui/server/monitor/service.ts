@@ -3,10 +3,13 @@ import { jetstream } from '@nats-io/jetstream';
 import { readFile } from 'node:fs/promises';
 import { MonitorStore } from './store.ts';
 import { BroadcastStore } from './broadcasts.ts';
+import { ActivityStore } from './activity.ts';
 import { traceConnection } from './nats.ts';
 
 const store = new MonitorStore(process.env.MONITOR_DB || '/data/monitor.sqlite');
 const broadcasts = new BroadcastStore(store);
+const activity = new ActivityStore(store);
+activity.reconcile();
 const ingressKey=process.env.MONITOR_INGRESS_KEY || '';
 if (!ingressKey && process.env.MONITOR_TEST !== 'true') throw Error('MONITOR_INGRESS_KEY required');
 const port=Number(process.env.MONITOR_PORT || 3310);
@@ -29,6 +32,13 @@ function notify() {
       const d=ws.data;
       if (d.broadcast) {
         const row=broadcasts.row(d.broadcast,false);
+        if (!row) {
+          if (!broadcastCache.has(d.broadcast)) broadcastCache.set(d.broadcast,activity.public(d.broadcast));
+          const snapshot=broadcastCache.get(d.broadcast);
+          if (!snapshot) {ws.send(JSON.stringify({kind:'revoked'}));ws.close(1008,'broadcast_unavailable');continue;}
+          if (d.cursor!==snapshot.cursor) ws.send(JSON.stringify({kind:'broadcast',data:snapshot}));
+          d.cursor=snapshot.cursor;continue;
+        }
         if (!row?.visible) {ws.send(JSON.stringify({kind:'revoked'}));ws.close(1008,'broadcast_unavailable');continue;}
         if (row.mode==='replay') {
           if(d.cursor!==row.updated_at)ws.send(JSON.stringify({kind:'broadcast_changed',data:broadcasts.metadata(row)}));
@@ -96,15 +106,26 @@ const server=Bun.serve<PeerData>({
         if (peers.size>=100) return json({error:'viewer_limit'},429);
         const requested=path==='/public/ws'&&!broadcastId?publicShare(url.searchParams.get('share') || ''):null;
         const broadcast=broadcastId?broadcasts.row(broadcastId,false):null;
-        if (path==='/public/ws' && (broadcastId ? !broadcast?.visible : !requested)) return json({error:'share_unavailable'},410);
-        if (srv.upgrade(req,{data:{owner:actor,share:requested?.id,broadcast:broadcast?.id,session:null,cursor:-1}})) return;
+        const auto=broadcastId&&!broadcast?activity.public(broadcastId):null;
+        if (path==='/public/ws' && (broadcastId ? !broadcast?.visible && !auto : !requested)) return json({error:'share_unavailable'},410);
+        if (srv.upgrade(req,{data:{owner:actor,share:requested?.id,broadcast:broadcast?.id||auto?.id,session:null,cursor:-1}})) return;
         return json({error:'websocket_required'},400);
       }
-      if(path==='/api/public/broadcasts' && req.method==='GET')return json(broadcasts.list());
+      if(path==='/api/public/broadcasts' && req.method==='GET')
+        return json([...activity.list(),...broadcasts.list().map(row=>({...row,kind:'broadcast'}))]);
       const broadcastPublic=path.match(/^\/api\/public\/broadcasts\/([a-f0-9]{32})$/);
       if(broadcastPublic && req.method==='GET') {
-        const snapshot=broadcasts.public(broadcastPublic[1],Math.max(0,Number(url.searchParams.get('before'))||0));
+        const manual=broadcasts.public(broadcastPublic[1],Math.max(0,Number(url.searchParams.get('before'))||0));
+        const snapshot=manual?{...manual,kind:'broadcast'}:activity.public(broadcastPublic[1]);
         return snapshot?json(snapshot):json({error:'broadcast_unavailable'},410);
+      }
+      if(path==='/api/v1/monitor/activity' && req.method==='GET')return json(activity.ownerList());
+      if(path==='/api/v1/monitor/activity' && req.method==='PATCH') {
+        const result=activity.setEnabled((await req.json()).enabled,String(actor));notify();return json(result);
+      }
+      const activitySession=path.match(/^\/api\/v1\/monitor\/activity\/sessions\/([a-f0-9]{32})$/);
+      if(activitySession && req.method==='PATCH') {
+        const result=activity.updateSession(activitySession[1],await req.json(),String(actor));notify();return json(result);
       }
       if(path==='/api/v1/monitor/broadcasts' && req.method==='GET')return json(broadcasts.list(true));
       if(path==='/api/v1/monitor/broadcasts/range' && req.method==='GET')return json(broadcasts.range(url.searchParams.get('sessionId') || ''));
@@ -114,7 +135,10 @@ const server=Bun.serve<PeerData>({
       }
       const broadcastPrivate=path.match(/^\/api\/v1\/monitor\/broadcasts\/([a-f0-9]{32})$/);
       if(broadcastPrivate && req.method==='PATCH') {
-        const result=broadcasts.update(broadcastPrivate[1],await req.json(),String(actor));notify();return json(result);
+        const body=await req.json();
+        const result=broadcasts.update(broadcastPrivate[1],body,String(actor));
+        if(body.visible===false && result.configuredMode==='live')activity.hideSession(result.sessionId,String(actor));
+        notify();return json(result);
       }
       if(broadcastPrivate && req.method==='DELETE') {broadcasts.remove(broadcastPrivate[1],String(actor));notify();return json({ok:true});}
       if (path==='/api/public/sessions' && req.method==='GET') return json(store.publicSessions());
@@ -154,7 +178,7 @@ const server=Bun.serve<PeerData>({
       return json({error:'not_found'},404);
     } catch (error) {
       const code=(error as Error).message;
-      return json({error:['invalid_share','invalid_title','invalid_range','invalid_broadcast','not_found','recording_too_large','recording_unavailable','draft_limit','archive_limit','preview_expired'].includes(code)?code:'request_failed'},400);
+      return json({error:['invalid_share','invalid_title','invalid_range','invalid_broadcast','invalid_activity','not_found','recording_too_large','recording_unavailable','draft_limit','archive_limit','preview_expired'].includes(code)?code:'request_failed'},400);
     }
   },
   websocket:{
@@ -195,7 +219,14 @@ async function project() {
       const consumer=await js.consumers.get('CODEX_TRACE','console-projector');
       const messages=await consumer.consume({max_messages:100});natsConnected=true;
       for await (const msg of messages) {
-        try {if(store.apply(msg.json() as any))notify();msg.ack();ingestionError=false;}
+        try {
+          const event=msg.json() as any;
+          if(store.apply(event)) {
+            if(event.type==='request.started')activity.reconcile();
+            notify();
+          }
+          msg.ack();ingestionError=false;
+        }
         catch {ingestionError=true;msg.nak(5000);}
       }
     } catch {natsConnected=false;}
@@ -205,6 +236,7 @@ async function project() {
 }
 if (process.env.MONITOR_TEST!=='true') void project();
 setInterval(()=>{
+  activity.reconcile();
   broadcasts.captureIdle();
   notify();
   for(const ws of peers)ws.ping();

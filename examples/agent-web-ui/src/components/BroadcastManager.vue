@@ -1,8 +1,37 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import MonitorTimelineItem from './MonitorTimelineItem.vue';
 import { localDateTime as local, recordingInputs, rangeProblem, type RecordingRange } from '../broadcast-range';
 const props = defineProps<{ sessions: any[]; selectedId?: string; repeatIdle?: boolean }>();
+const autoEnabled = ref(false), autoRows = ref<any[]>([]), autoBusy = ref(false), autoError = ref('');
+const autoLabels = reactive<Record<string, string>>({});
+let autoPoll: ReturnType<typeof setInterval> | undefined;
+async function activityApi(path = '', init?: RequestInit) {
+  const response = await fetch('/api/v1/monitor/activity' + path, { credentials: 'same-origin', ...init });
+  const data = await response.json();
+  if (!response.ok) throw Error(data.error || 'Не удалось обновить автоматический эфир.');
+  return data;
+}
+async function refreshActivity() {
+  if (autoBusy.value) return;
+  try {
+    const data = await activityApi();
+    autoEnabled.value = data.enabled;
+    autoRows.value = data.sessions;
+    for (const row of data.sessions) if (!(row.sessionId in autoLabels)) autoLabels[row.sessionId] = row.label || '';
+    autoError.value = '';
+  } catch (error) { autoError.value = (error as Error).message; }
+}
+async function changeActivity(path: string, body: object) {
+  autoBusy.value = true;
+  autoError.value = '';
+  try {
+    await activityApi(path, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  } catch (error) { autoError.value = (error as Error).message; }
+  finally { autoBusy.value = false; }
+  await refreshActivity();
+}
+onUnmounted(() => clearInterval(autoPoll));
 const rows = ref<any[]>([]),
   sessionId = ref(props.selectedId || ''),
   title = ref(''),
@@ -199,6 +228,8 @@ onMounted(() => {
     );
   }
   void refresh().catch((e) => (error.value = e.message));
+  void refreshActivity();
+  autoPoll = setInterval(() => void refreshActivity(), 10_000);
   if (sessionId.value) void loadRange(sessionId.value);
 });
 </script>
@@ -223,6 +254,22 @@ onMounted(() => {
     <p v-if="error" role="alert" class="notice error">{{ error }}</p>
     <button v-if="canFit" class="primary fit-button" :disabled="busy || !!dateError" @click="preview(true)">Подобрать фрагмент по лимиту</button>
     <p v-if="notice" role="status" class="notice">{{ notice }}</p>
+    <section class="auto-activity" aria-label="Автоматический эфир">
+      <div class="auto-activity-heading">
+        <div><h3>Автоматический эфир</h3><p>Новые чаты через Codex proxy появляются после первого запроса. Сайт показывает только этапы работы — без текста чата.</p></div>
+        <button type="button" :disabled="autoBusy" @click="changeActivity('', { enabled: !autoEnabled })">{{ autoEnabled ? 'Приостановить' : 'Включить' }}</button>
+      </div>
+      <p v-if="autoError" role="alert" class="notice error">{{ autoError }}</p>
+      <p class="auto-activity-state">Сейчас: {{ autoEnabled ? 'автоматический эфир включён' : 'автоматический эфир на паузе' }}. <button type="button" :disabled="autoBusy" @click="refreshActivity">Обновить список</button></p>
+      <div v-if="autoRows.length" class="auto-activity-list">
+        <div v-for="row in autoRows" :key="row.sessionId" class="auto-activity-row">
+          <div><strong>{{ row.label || 'Сессия ' + row.publicId.slice(0, 6) }}</strong><small>{{ row.status }} · {{ formatDate(row.lastEventAt) }} · {{ row.hidden ? 'скрыта' : 'видна, когда активна' }}</small></div>
+          <label>Название для сайта <input v-model="autoLabels[row.sessionId]" maxlength="100" :disabled="autoBusy" placeholder="Необязательно" /></label>
+          <button type="button" :disabled="autoBusy" @click="changeActivity('/sessions/' + row.sessionId, { label: autoLabels[row.sessionId] })">Сохранить</button>
+          <button type="button" :disabled="autoBusy" @click="changeActivity('/sessions/' + row.sessionId, { hidden: !row.hidden })">{{ row.hidden ? 'Вернуть' : 'Скрыть' }}</button>
+        </div>
+      </div>
+    </section>
     <div class="manager-grid">
       <form @submit.prevent="preview()" class="editor">
         <h3>Новая публикация</h3>
@@ -505,6 +552,18 @@ input[type='datetime-local'] { color-scheme: dark; }
   padding: 16px;
   font: 11px/1.7 monospace;
 }
+.auto-activity { border: 1px solid var(--line, #353543); border-radius: 12px; padding: 18px; margin: 18px 0 24px; }
+.auto-activity-heading { display: flex; gap: 20px; align-items: flex-start; justify-content: space-between; }
+.auto-activity-heading h3 { margin: 0 0 6px; }
+.auto-activity-heading p, .auto-activity-state { color: var(--text-muted, #999); font-size: 12px; line-height: 1.5; }
+.auto-activity button { cursor: pointer; }
+.auto-activity-list { display: grid; gap: 8px; max-height: 400px; overflow: auto; }
+.auto-activity-row { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(160px, 1fr) auto auto; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--line, #353543); border-radius: 8px; }
+.auto-activity-row strong, .auto-activity-row small { display: block; overflow-wrap: anywhere; }
+.auto-activity-row small { color: var(--text-muted, #999); font-size: 11px; }
+.auto-activity-row label { font-size: 11px; }
+.auto-activity-row input { display: block; width: 100%; min-width: 0; }
+@media (max-width: 760px) { .auto-activity-heading { flex-direction: column; } .auto-activity-row { grid-template-columns: 1fr 1fr; } .auto-activity-row > div, .auto-activity-row label { grid-column: 1 / -1; } }
 .broadcast-manager {
   padding: 26px;
   background: var(--bg-secondary);
